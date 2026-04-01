@@ -1,13 +1,12 @@
 package models
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-
-	"github.com/schollz/progressbar/v3"
 )
 
 const huggingFaceBase = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
@@ -49,7 +48,8 @@ func (m *Manager) IsDownloaded(model string) bool {
 }
 
 // EnsureDownloaded downloads the model if not already present.
-func (m *Manager) EnsureDownloaded(model string) error {
+// onProgress is called with (bytesWritten, totalBytes) during download; pass nil to silence it.
+func (m *Manager) EnsureDownloaded(ctx context.Context, model string, onProgress func(done, total int64)) error {
 	if m.IsDownloaded(model) {
 		return nil
 	}
@@ -64,9 +64,12 @@ func (m *Manager) EnsureDownloaded(model string) error {
 	}
 
 	url := huggingFaceBase + filename
-	fmt.Printf("Downloading %s...\n", url)
 
-	resp, err := http.Get(url) //nolint:noctx
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", model, err)
 	}
@@ -85,16 +88,35 @@ func (m *Manager) EnsureDownloaded(model string) error {
 		os.Remove(tmp)
 	}()
 
-	bar := progressbar.DefaultBytes(resp.ContentLength, filename)
-	if _, err := io.Copy(io.MultiWriter(f, bar), resp.Body); err != nil {
+	var dst io.Writer = f
+	if onProgress != nil {
+		dst = io.MultiWriter(f, &progressWriter{
+			total:    resp.ContentLength,
+			callback: onProgress,
+		})
+	}
+
+	if _, err := io.Copy(dst, resp.Body); err != nil {
 		return fmt.Errorf("write model: %w", err)
 	}
 	f.Close()
-	fmt.Println()
 
 	if err := os.Rename(tmp, dest); err != nil {
 		return fmt.Errorf("finalize model: %w", err)
 	}
-	fmt.Printf("Model saved to %s\n", dest)
 	return nil
+}
+
+// progressWriter reports download progress via a callback.
+type progressWriter struct {
+	done     int64
+	total    int64
+	callback func(done, total int64)
+}
+
+func (pw *progressWriter) Write(p []byte) (n int, err error) {
+	n = len(p)
+	pw.done += int64(n)
+	pw.callback(pw.done, pw.total)
+	return n, nil
 }
