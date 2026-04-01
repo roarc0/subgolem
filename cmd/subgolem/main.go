@@ -193,10 +193,20 @@ func run(cmd *cobra.Command, args []string) error {
 			FileCount:     len(files),
 		}
 
+		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		if err != nil {
+			return fmt.Errorf("open tty: %w", err)
+		}
+
 		restoreFds := muteCLibOutput()
-		p := tea.NewProgram(newTUIModel(cfg), tea.WithAltScreen())
+		p := tea.NewProgram(newTUIModel(cfg),
+			tea.WithAltScreen(),
+			tea.WithInput(tty),
+			tea.WithOutput(tty),
+		)
 		finalModel, err := p.Run()
 		restoreFds()
+		tty.Close()
 		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
