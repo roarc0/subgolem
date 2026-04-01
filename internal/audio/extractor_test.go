@@ -24,7 +24,7 @@ func TestExtractor_Extract(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "out.pcm")
-	e := audio.NewExtractor()
+	e := audio.NewExtractor(false)
 	if err := e.Extract(context.Background(), src, dst); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}

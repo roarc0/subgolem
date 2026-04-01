@@ -48,20 +48,30 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().String("translator", "whisper", "translation backend: whisper|openai")
 	cmd.Flags().Bool("gpu", true, "enable Vulkan GPU acceleration")
 	cmd.Flags().String("data-dir", "data", "directory for models and temp files")
-	cmd.Flags().Int("beam-size", 5, "whisper beam search width (larger = more accurate, slower)")
-	cmd.Flags().Bool("vad", false, "enable voice activity detection (strips silence/noise)")
-	cmd.Flags().Duration("merge-gap", 500*time.Millisecond, "merge segments closer than this gap (0 = disabled)")
+	cmd.Flags().Bool("audio-filter", true, "apply loudness normalisation and speech bandpass filter (FFmpeg)")
+	cmd.Flags().Int("beam-size", 10, "whisper beam search width (larger = more accurate, slower)")
+	cmd.Flags().Bool("vad", true, "enable voice activity detection (strips silence/noise)")
+	cmd.Flags().String("prompt", "", "initial prompt to guide whisper (e.g. domain vocabulary)")
+	cmd.Flags().Bool("clean", true, "strip whisper hallucination artifacts ([Music], ♪, etc.)")
+	cmd.Flags().Duration("merge-gap", 600*time.Millisecond, "merge segments closer than this gap (0 = disabled)")
 	cmd.Flags().Int("merge-chars", 80, "max characters per merged segment")
+	cmd.Flags().Int("split-chars", 80, "split segments longer than this (0 = disabled)")
+	cmd.Flags().Bool("fix-overlaps", true, "trim segments whose end time overlaps the next segment")
 
 	viper.BindPFlag("model", cmd.Flags().Lookup("model"))
 	viper.BindPFlag("language", cmd.Flags().Lookup("language"))
 	viper.BindPFlag("translator", cmd.Flags().Lookup("translator"))
 	viper.BindPFlag("gpu", cmd.Flags().Lookup("gpu"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
+	viper.BindPFlag("audio_filter", cmd.Flags().Lookup("audio-filter"))
 	viper.BindPFlag("beam_size", cmd.Flags().Lookup("beam-size"))
 	viper.BindPFlag("vad", cmd.Flags().Lookup("vad"))
+	viper.BindPFlag("prompt", cmd.Flags().Lookup("prompt"))
+	viper.BindPFlag("clean", cmd.Flags().Lookup("clean"))
 	viper.BindPFlag("merge_gap", cmd.Flags().Lookup("merge-gap"))
 	viper.BindPFlag("merge_chars", cmd.Flags().Lookup("merge-chars"))
+	viper.BindPFlag("split_chars", cmd.Flags().Lookup("split-chars"))
+	viper.BindPFlag("fix_overlaps", cmd.Flags().Lookup("fix-overlaps"))
 
 	return cmd
 }
@@ -170,10 +180,15 @@ func run(cmd *cobra.Command, args []string) error {
 			OpenAIBaseURL: viper.GetString("openai.base_url"),
 			OpenAIAPIKey:  viper.GetString("openai.api_key"),
 			OpenAIModel:   viper.GetString("openai.model"),
+			AudioFilter:   viper.GetBool("audio_filter"),
 			BeamSize:      viper.GetInt("beam_size"),
 			VAD:           viper.GetBool("vad"),
+			Prompt:        viper.GetString("prompt"),
+			Clean:         viper.GetBool("clean"),
 			MergeGap:      viper.GetDuration("merge_gap"),
 			MergeChars:    viper.GetInt("merge_chars"),
+			SplitChars:    viper.GetInt("split_chars"),
+			FixOverlaps:   viper.GetBool("fix_overlaps"),
 			FileIndex:     i + 1,
 			FileCount:     len(files),
 		}

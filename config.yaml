@@ -4,10 +4,20 @@ translator: whisper
 gpu: true
 data_dir: data
 
-beam_size: 10
-vad: true
-merge_gap: 600ms
-merge_chars: 80
+# audio
+audio_filter: true   # loudness normalisation + speech bandpass (200–3000 Hz)
+
+# transcription
+beam_size: 10        # beam search width — higher = more accurate, slower
+vad: true            # voice activity detection — strips silence/noise
+prompt: ""           # optional initial prompt to guide whisper (e.g. domain vocabulary)
+
+# post-processing
+clean: true          # strip hallucination artifacts ([Music], ♪, repeated phrases)
+merge_gap: 600ms     # merge consecutive segments with gap ≤ this value
+merge_chars: 80      # max characters per merged segment
+split_chars: 80      # split segments longer than this (0 = disabled)
+fix_overlaps: true   # trim segment end times that overlap the next segment
 
 openai:
   base_url: http://localhost:1234/v1

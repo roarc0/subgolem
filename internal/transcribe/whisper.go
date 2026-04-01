@@ -21,6 +21,7 @@ type WhisperTranscriber struct {
 	model    whisper.Model
 	beamSize int
 	vad      bool
+	prompt   string
 }
 
 // muteStderr redirects fd 2 to /dev/null and returns a restore function.
@@ -50,14 +51,14 @@ func muteStderr() func() {
 // NewWhisperTranscriber loads the model at modelPath.
 // beamSize controls beam search width (5 = default, 10 = better accuracy/slower).
 // vad enables voice activity detection to strip silence before processing.
-func NewWhisperTranscriber(modelPath string, beamSize int, vad bool) (*WhisperTranscriber, error) {
+func NewWhisperTranscriber(modelPath string, beamSize int, vad bool, prompt string) (*WhisperTranscriber, error) {
 	restore := muteStderr()
 	m, err := whisper.New(modelPath)
 	restore()
 	if err != nil {
 		return nil, fmt.Errorf("load whisper model %s: %w", modelPath, err)
 	}
-	return &WhisperTranscriber{model: m, beamSize: beamSize, vad: vad}, nil
+	return &WhisperTranscriber{model: m, beamSize: beamSize, vad: vad, prompt: prompt}, nil
 }
 
 // Close releases model resources.
@@ -90,6 +91,9 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	}
 	if w.vad {
 		ctx.SetVAD(true)
+	}
+	if w.prompt != "" {
+		ctx.SetInitialPrompt(w.prompt)
 	}
 
 	if lang != "" && lang != "auto" {

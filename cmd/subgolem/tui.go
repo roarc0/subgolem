@@ -115,10 +115,15 @@ type PipelineConfig struct {
 	OpenAIBaseURL string
 	OpenAIAPIKey  string
 	OpenAIModel   string
+	AudioFilter   bool
+	Prompt        string
 	BeamSize      int
 	VAD           bool
+	Clean         bool
 	MergeGap      time.Duration // 0 = no merging
 	MergeChars    int
+	SplitChars    int // 0 = disabled
+	FixOverlaps   bool
 	FileIndex     int // 1-based index when processing multiple files (0 = single file)
 	FileCount     int
 }
@@ -364,7 +369,7 @@ func (m tuiModel) cmdExtract() tea.Cmd {
 		}
 
 		pcmPath := filepath.Join(tmpDir, "audio.pcm")
-		if err := audio.NewExtractor().Extract(ctx, cfg.InputPath, pcmPath); err != nil {
+		if err := audio.NewExtractor(cfg.AudioFilter).Extract(ctx, cfg.InputPath, pcmPath); err != nil {
 			return stepErrMsg{stepExtract, err}
 		}
 		return stepDoneMsg{stepExtract, ""}
@@ -386,7 +391,7 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			pcmPath := filepath.Join(cfg.DataDir, "tmp", "audio.pcm")
 			useTranslation := cfg.TranslatorID == "whisper"
 
-			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName), cfg.BeamSize, cfg.VAD)
+			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName), cfg.BeamSize, cfg.VAD, cfg.Prompt)
 			if err != nil {
 				close(ch)
 				return stepErrMsg{stepTranscribe, err}
@@ -404,8 +409,17 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 				return stepErrMsg{stepTranscribe, err}
 			}
 
+			if cfg.Clean {
+				segs = intsegment.Clean(segs)
+			}
 			if cfg.MergeGap > 0 {
 				segs = intsegment.Merge(segs, cfg.MergeGap, cfg.MergeChars)
+			}
+			if cfg.SplitChars > 0 {
+				segs = intsegment.Split(segs, cfg.SplitChars)
+			}
+			if cfg.FixOverlaps {
+				segs = intsegment.FixOverlaps(segs)
 			}
 
 			pipe.segments = segs
