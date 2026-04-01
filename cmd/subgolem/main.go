@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -47,12 +48,20 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().String("translator", "whisper", "translation backend: whisper|openai")
 	cmd.Flags().Bool("gpu", true, "enable Vulkan GPU acceleration")
 	cmd.Flags().String("data-dir", "data", "directory for models and temp files")
+	cmd.Flags().Int("beam-size", 5, "whisper beam search width (larger = more accurate, slower)")
+	cmd.Flags().Bool("vad", false, "enable voice activity detection (strips silence/noise)")
+	cmd.Flags().Duration("merge-gap", 500*time.Millisecond, "merge segments closer than this gap (0 = disabled)")
+	cmd.Flags().Int("merge-chars", 80, "max characters per merged segment")
 
 	viper.BindPFlag("model", cmd.Flags().Lookup("model"))
 	viper.BindPFlag("language", cmd.Flags().Lookup("language"))
 	viper.BindPFlag("translator", cmd.Flags().Lookup("translator"))
 	viper.BindPFlag("gpu", cmd.Flags().Lookup("gpu"))
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
+	viper.BindPFlag("beam_size", cmd.Flags().Lookup("beam-size"))
+	viper.BindPFlag("vad", cmd.Flags().Lookup("vad"))
+	viper.BindPFlag("merge_gap", cmd.Flags().Lookup("merge-gap"))
+	viper.BindPFlag("merge_chars", cmd.Flags().Lookup("merge-chars"))
 
 	return cmd
 }
@@ -161,6 +170,10 @@ func run(cmd *cobra.Command, args []string) error {
 			OpenAIBaseURL: viper.GetString("openai.base_url"),
 			OpenAIAPIKey:  viper.GetString("openai.api_key"),
 			OpenAIModel:   viper.GetString("openai.model"),
+			BeamSize:      viper.GetInt("beam_size"),
+			VAD:           viper.GetBool("vad"),
+			MergeGap:      viper.GetDuration("merge_gap"),
+			MergeChars:    viper.GetInt("merge_chars"),
 			FileIndex:     i + 1,
 			FileCount:     len(files),
 		}

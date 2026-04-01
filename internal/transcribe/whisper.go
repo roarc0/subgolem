@@ -18,7 +18,9 @@ import (
 
 // WhisperTranscriber transcribes audio using a local whisper.cpp model.
 type WhisperTranscriber struct {
-	model whisper.Model
+	model    whisper.Model
+	beamSize int
+	vad      bool
 }
 
 // muteStderr redirects fd 2 to /dev/null and returns a restore function.
@@ -46,15 +48,16 @@ func muteStderr() func() {
 }
 
 // NewWhisperTranscriber loads the model at modelPath.
-// modelPath should point to a ggml .bin file (e.g. data/models/ggml-large-v3.bin).
-func NewWhisperTranscriber(modelPath string) (*WhisperTranscriber, error) {
+// beamSize controls beam search width (5 = default, 10 = better accuracy/slower).
+// vad enables voice activity detection to strip silence before processing.
+func NewWhisperTranscriber(modelPath string, beamSize int, vad bool) (*WhisperTranscriber, error) {
 	restore := muteStderr()
 	m, err := whisper.New(modelPath)
 	restore()
 	if err != nil {
 		return nil, fmt.Errorf("load whisper model %s: %w", modelPath, err)
 	}
-	return &WhisperTranscriber{model: m}, nil
+	return &WhisperTranscriber{model: m, beamSize: beamSize, vad: vad}, nil
 }
 
 // Close releases model resources.
@@ -78,6 +81,16 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	}
 
 	ctx.SetThreads(uint(runtime.NumCPU()))
+	ctx.SetTokenTimestamps(true)
+	ctx.SetSplitOnWord(true)
+	ctx.SetTemperature(0)
+	ctx.SetTemperatureFallback(0)
+	if w.beamSize > 0 {
+		ctx.SetBeamSize(w.beamSize)
+	}
+	if w.vad {
+		ctx.SetVAD(true)
+	}
 
 	if lang != "" && lang != "auto" {
 		if err := ctx.SetLanguage(lang); err != nil {

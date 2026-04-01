@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -114,6 +115,10 @@ type PipelineConfig struct {
 	OpenAIBaseURL string
 	OpenAIAPIKey  string
 	OpenAIModel   string
+	BeamSize      int
+	VAD           bool
+	MergeGap      time.Duration // 0 = no merging
+	MergeChars    int
 	FileIndex     int // 1-based index when processing multiple files (0 = single file)
 	FileCount     int
 }
@@ -381,7 +386,7 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			pcmPath := filepath.Join(cfg.DataDir, "tmp", "audio.pcm")
 			useTranslation := cfg.TranslatorID == "whisper"
 
-			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName))
+			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName), cfg.BeamSize, cfg.VAD)
 			if err != nil {
 				close(ch)
 				return stepErrMsg{stepTranscribe, err}
@@ -397,6 +402,10 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			close(ch)
 			if err != nil {
 				return stepErrMsg{stepTranscribe, err}
+			}
+
+			if cfg.MergeGap > 0 {
+				segs = intsegment.Merge(segs, cfg.MergeGap, cfg.MergeChars)
 			}
 
 			pipe.segments = segs
