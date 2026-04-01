@@ -5,11 +5,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+var videoExts = map[string]bool{
+	".mp4": true, ".mkv": true, ".avi": true, ".mov": true,
+	".wmv": true, ".flv": true, ".webm": true, ".m4v": true,
+	".mp3": true, ".wav": true, ".flac": true, ".ogg": true,
+	".m4a": true, ".aac": true,
+}
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -21,26 +29,25 @@ func newRootCmd() *cobra.Command {
 	var cfgFile string
 
 	cmd := &cobra.Command{
-		Use:          "subgolem -i <input> [-o <output.srt>]",
+		Use:          "subgolem -i <input> [-i <input2>] [-o <output.srt>]",
 		Short:        "Generate English SRT subtitles from non-English video",
 		Long:         "subgolem transcribes and translates video audio to English SRT subtitles using a local whisper.cpp model.",
 		RunE:         run,
 		SilenceUsage: true,
+		Args:         cobra.ArbitraryArgs,
 	}
 
 	cobra.OnInitialize(func() { initConfig(cfgFile) })
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ./config.yaml)")
-	cmd.Flags().StringP("input", "i", "", "input video or audio file")
-	cmd.Flags().StringP("output", "o", "", "output SRT file (default: <input>.srt)")
+	cmd.Flags().StringArrayP("input", "i", nil, "input video/audio file or directory (repeatable)")
+	cmd.Flags().StringP("output", "o", "", "output SRT file (only valid for single input)")
 	cmd.Flags().String("model", "large-v3", "whisper model: tiny|base|small|medium|large-v3")
 	cmd.Flags().String("language", "auto", "source language code (e.g. 'he') or 'auto'")
 	cmd.Flags().String("translator", "whisper", "translation backend: whisper|openai")
 	cmd.Flags().Bool("gpu", true, "enable Vulkan GPU acceleration")
 	cmd.Flags().String("data-dir", "data", "directory for models and temp files")
 
-	viper.BindPFlag("input", cmd.Flags().Lookup("input"))
-	viper.BindPFlag("output", cmd.Flags().Lookup("output"))
 	viper.BindPFlag("model", cmd.Flags().Lookup("model"))
 	viper.BindPFlag("language", cmd.Flags().Lookup("language"))
 	viper.BindPFlag("translator", cmd.Flags().Lookup("translator"))
@@ -48,6 +55,39 @@ func newRootCmd() *cobra.Command {
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
 
 	return cmd
+}
+
+// muteCLibOutput redirects stdout and stderr fds to /dev/null for the duration
+// of the TUI so that C library diagnostics (whisper, ggml) don't corrupt the display.
+// bubbletea owns its own terminal handle (via /dev/tty) so the TUI is unaffected.
+func muteCLibOutput() func() {
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return func() {}
+	}
+	null := int(devNull.Fd())
+
+	savedOut, errOut := syscall.Dup(1)
+	savedErr, errErr := syscall.Dup(2)
+
+	if errOut == nil {
+		syscall.Dup2(null, 1) //nolint:errcheck
+	}
+	if errErr == nil {
+		syscall.Dup2(null, 2) //nolint:errcheck
+	}
+	devNull.Close()
+
+	return func() {
+		if errOut == nil {
+			syscall.Dup2(savedOut, 1) //nolint:errcheck
+			syscall.Close(savedOut)
+		}
+		if errErr == nil {
+			syscall.Dup2(savedErr, 2) //nolint:errcheck
+			syscall.Close(savedErr)
+		}
+	}
 }
 
 func initConfig(cfgFile string) {
@@ -64,19 +104,39 @@ func initConfig(cfgFile string) {
 	_ = viper.ReadInConfig()
 }
 
-func run(_ *cobra.Command, _ []string) error {
-	inputPath := viper.GetString("input")
-	if inputPath == "" {
-		return fmt.Errorf("input file required — use -i flag or set 'input' in config.yaml")
-	}
-	if _, err := os.Stat(inputPath); err != nil {
-		return fmt.Errorf("input file not found: %s", inputPath)
+func run(cmd *cobra.Command, args []string) error {
+	// Collect inputs from -i flags and positional args.
+	flagInputs, _ := cmd.Flags().GetStringArray("input")
+	inputs := append(flagInputs, args...)
+
+	if len(inputs) == 0 {
+		return fmt.Errorf("input required — use -i <file|dir> or pass paths as arguments")
 	}
 
-	outputPath := viper.GetString("output")
-	if outputPath == "" {
-		ext := filepath.Ext(inputPath)
-		outputPath = strings.TrimSuffix(inputPath, ext) + ".srt"
+	// Expand directories and validate files.
+	var files []string
+	for _, p := range inputs {
+		info, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("input not found: %s", p)
+		}
+		if info.IsDir() {
+			expanded, err := expandDir(p)
+			if err != nil {
+				return err
+			}
+			if len(expanded) == 0 {
+				return fmt.Errorf("no supported video/audio files found in %s", p)
+			}
+			files = append(files, expanded...)
+		} else {
+			files = append(files, p)
+		}
+	}
+
+	outputPath, _ := cmd.Flags().GetString("output")
+	if outputPath != "" && len(files) > 1 {
+		return fmt.Errorf("-o is only valid for a single input file")
 	}
 
 	translatorID := viper.GetString("translator")
@@ -84,31 +144,60 @@ func run(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("unknown translator %q — valid: whisper, openai", translatorID)
 	}
 
-	cfg := PipelineConfig{
-		InputPath:     inputPath,
-		OutputPath:    outputPath,
-		ModelName:     viper.GetString("model"),
-		Lang:          viper.GetString("language"),
-		TranslatorID:  translatorID,
-		DataDir:       viper.GetString("data_dir"),
-		OpenAIBaseURL: viper.GetString("openai.base_url"),
-		OpenAIAPIKey:  viper.GetString("openai.api_key"),
-		OpenAIModel:   viper.GetString("openai.model"),
-	}
+	for i, inputPath := range files {
+		out := outputPath
+		if out == "" {
+			ext := filepath.Ext(inputPath)
+			out = strings.TrimSuffix(inputPath, ext) + ".srt"
+		}
 
-	p := tea.NewProgram(newTUIModel(cfg), tea.WithAltScreen())
-	finalModel, err := p.Run()
-	if err != nil {
-		return fmt.Errorf("TUI error: %w", err)
-	}
+		cfg := PipelineConfig{
+			InputPath:     inputPath,
+			OutputPath:    out,
+			ModelName:     viper.GetString("model"),
+			Lang:          viper.GetString("language"),
+			TranslatorID:  translatorID,
+			DataDir:       viper.GetString("data_dir"),
+			OpenAIBaseURL: viper.GetString("openai.base_url"),
+			OpenAIAPIKey:  viper.GetString("openai.api_key"),
+			OpenAIModel:   viper.GetString("openai.model"),
+			FileIndex:     i + 1,
+			FileCount:     len(files),
+		}
 
-	// Surface any pipeline error that caused the TUI to quit
-	if m, ok := finalModel.(tuiModel); ok {
-		for _, s := range m.steps {
-			if s.err != nil {
-				return s.err
+		restoreFds := muteCLibOutput()
+		p := tea.NewProgram(newTUIModel(cfg), tea.WithAltScreen())
+		finalModel, err := p.Run()
+		restoreFds()
+		if err != nil {
+			return fmt.Errorf("TUI error: %w", err)
+		}
+
+		if m, ok := finalModel.(tuiModel); ok {
+			for _, s := range m.steps {
+				if s.err != nil {
+					return fmt.Errorf("%s: %w", filepath.Base(inputPath), s.err)
+				}
 			}
 		}
 	}
 	return nil
+}
+
+// expandDir returns all supported video/audio files in dir (non-recursive).
+func expandDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory %s: %w", dir, err)
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if videoExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	return files, nil
 }

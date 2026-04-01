@@ -64,7 +64,6 @@ func (m *Manager) EnsureDownloaded(ctx context.Context, model string, onProgress
 	}
 
 	url := huggingFaceBase + filename
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)

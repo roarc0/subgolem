@@ -26,7 +26,7 @@ CGO_LDFLAGS_VAL := -L$(PWD)/$(WHISPER_BUILD)/src \
                    $(VULKAN_LDFLAGS) \
                    -lstdc++ -lm -fopenmp
 
-.PHONY: all setup build build-cpu test clean clean-all help
+.PHONY: all setup build build-cpu run test clean clean-all help
 
 all: build
 
@@ -71,6 +71,11 @@ build-cpu: $(WHISPER_SRC) go.work
 	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
 	CGO_LDFLAGS="-L$(PWD)/$(WHISPER_BUILD)/src -L$(PWD)/$(WHISPER_BUILD)/ggml/src -L$(PWD)/$(WHISPER_BUILD)/ggml/src/ggml-vulkan -lwhisper -lggml -lggml-base -lggml-cpu -lstdc++ -lm -fopenmp" \
 	go build -o bin/subgolem ./cmd/subgolem/
+
+## run      — go run subgolem (requires setup); pass args via ARGS="-i file.mp4"
+run: setup
+	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" CGO_LDFLAGS="$(CGO_LDFLAGS_VAL)" \
+	go run ./cmd/subgolem/ $(ARGS)
 
 ## test     — run unit tests (does NOT require setup)
 test:

@@ -73,10 +73,25 @@ type dlProgressMsg struct {
 	total int64
 }
 
+type txProgressMsg struct{ pct float32 }
+
 // dlProgressCh streams download progress into the TUI event loop.
 type dlProgressCh chan dlProgressMsg
 
 func (ch dlProgressCh) wait() tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+// txProgressCh streams transcription progress into the TUI event loop.
+type txProgressCh chan txProgressMsg
+
+func (ch txProgressCh) wait() tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
@@ -99,6 +114,8 @@ type PipelineConfig struct {
 	OpenAIBaseURL string
 	OpenAIAPIKey  string
 	OpenAIModel   string
+	FileIndex     int // 1-based index when processing multiple files (0 = single file)
+	FileCount     int
 }
 
 // ── shared pipeline state ──────────────────────────────────────────────────
@@ -131,6 +148,8 @@ type tuiModel struct {
 	prog    progress.Model
 	dlCh    dlProgressCh
 	dlPct   float64
+	txCh    txProgressCh
+	txPct   float64
 	pipe    *pipeState // shared across bubbletea value copies
 	mgr     *models.Manager
 	done    bool
@@ -151,6 +170,7 @@ func newTUIModel(cfg PipelineConfig) tuiModel {
 		spinner: s,
 		prog:    p,
 		dlCh:    make(dlProgressCh, 256),
+		txCh:    make(txProgressCh, 256),
 		pipe:    &pipeState{},
 		mgr:     models.NewManager(cfg.DataDir),
 	}
@@ -184,6 +204,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progCmd := m.prog.SetPercent(m.dlPct)
 		return m, tea.Batch(progCmd, m.dlCh.wait())
 
+	case txProgressMsg:
+		m.txPct = float64(msg.pct)
+		progCmd := m.prog.SetPercent(m.txPct)
+		return m, tea.Batch(progCmd, m.txCh.wait())
+
 	case progress.FrameMsg:
 		newProg, cmd := m.prog.Update(msg)
 		m.prog = newProg.(progress.Model)
@@ -199,6 +224,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.current = next
 		m.steps[next].status = statusRunning
+		if next == stepTranscribe {
+			m.txPct = 0
+			m.txCh = make(txProgressCh, 256)
+		}
 		return m, m.cmdForStep(next)
 
 	case stepErrMsg:
@@ -214,7 +243,11 @@ func (m tuiModel) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(styleTitle.Render("subgolem") + "\n\n")
+	title := "subgolem"
+	if m.cfg.FileCount > 1 {
+		title += fmt.Sprintf("  %s", styleMeta.Render(fmt.Sprintf("[%d/%d]", m.cfg.FileIndex, m.cfg.FileCount)))
+	}
+	b.WriteString(styleTitle.Render(title) + "\n\n")
 
 	meta := fmt.Sprintf("  %s  →  %s   model: %s · lang: %s · translator: %s",
 		styleMeta.Render(filepath.Base(m.cfg.InputPath)),
@@ -250,6 +283,9 @@ func (m tuiModel) View() string {
 		b.WriteString(fmt.Sprintf("  %s  %s\n", icon, label))
 
 		if i == stepDownload && s.status == statusRunning {
+			b.WriteString("\n  " + m.prog.View() + "\n\n")
+		}
+		if i == stepTranscribe && s.status == statusRunning {
 			b.WriteString("\n  " + m.prog.View() + "\n\n")
 		}
 	}
@@ -334,29 +370,40 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 	cfg := m.cfg
 	mgr := m.mgr
 	pipe := m.pipe
+	ch := m.txCh
 
-	return func() tea.Msg {
-		ctx, cancel := context.WithCancel(context.Background())
-		pipe.cancel = cancel
-		defer cancel()
+	return tea.Batch(
+		func() tea.Msg {
+			ctx, cancel := context.WithCancel(context.Background())
+			pipe.cancel = cancel
+			defer cancel()
 
-		pcmPath := filepath.Join(cfg.DataDir, "tmp", "audio.pcm")
-		useTranslation := cfg.TranslatorID == "whisper"
+			pcmPath := filepath.Join(cfg.DataDir, "tmp", "audio.pcm")
+			useTranslation := cfg.TranslatorID == "whisper"
 
-		t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName))
-		if err != nil {
-			return stepErrMsg{stepTranscribe, err}
-		}
-		defer t.Close()
+			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName))
+			if err != nil {
+				close(ch)
+				return stepErrMsg{stepTranscribe, err}
+			}
+			defer t.Close()
 
-		segs, err := t.Transcribe(ctx, pcmPath, cfg.Lang, useTranslation)
-		if err != nil {
-			return stepErrMsg{stepTranscribe, err}
-		}
+			segs, err := t.Transcribe(ctx, pcmPath, cfg.Lang, useTranslation, func(pct float32) {
+				select {
+				case ch <- txProgressMsg{pct}:
+				default:
+				}
+			})
+			close(ch)
+			if err != nil {
+				return stepErrMsg{stepTranscribe, err}
+			}
 
-		pipe.segments = segs
-		return stepDoneMsg{stepTranscribe, fmt.Sprintf("%d segments", len(segs))}
-	}
+			pipe.segments = segs
+			return stepDoneMsg{stepTranscribe, fmt.Sprintf("%d segments", len(segs))}
+		},
+		ch.wait(),
+	)
 }
 
 func (m tuiModel) cmdTranslate() tea.Cmd {

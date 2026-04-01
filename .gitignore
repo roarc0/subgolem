@@ -1,4 +1,7 @@
 *.mp4
+*.mkv
+*.avi
+*.srt
 data/
 bin/
 go.work

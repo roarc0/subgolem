@@ -7,7 +7,9 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 
@@ -19,10 +21,36 @@ type WhisperTranscriber struct {
 	model whisper.Model
 }
 
+// muteStderr redirects fd 2 to /dev/null and returns a restore function.
+// This silences C-library output (whisper_model_load etc.) that bypasses Go's os.Stderr.
+func muteStderr() func() {
+	savedFd, err := syscall.Dup(2)
+	if err != nil {
+		return func() {}
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		syscall.Close(savedFd)
+		return func() {}
+	}
+	if err := syscall.Dup2(int(devNull.Fd()), 2); err != nil {
+		syscall.Close(savedFd)
+		devNull.Close()
+		return func() {}
+	}
+	return func() {
+		syscall.Dup2(savedFd, 2) //nolint:errcheck
+		syscall.Close(savedFd)
+		devNull.Close()
+	}
+}
+
 // NewWhisperTranscriber loads the model at modelPath.
 // modelPath should point to a ggml .bin file (e.g. data/models/ggml-large-v3.bin).
 func NewWhisperTranscriber(modelPath string) (*WhisperTranscriber, error) {
+	restore := muteStderr()
 	m, err := whisper.New(modelPath)
+	restore()
 	if err != nil {
 		return nil, fmt.Errorf("load whisper model %s: %w", modelPath, err)
 	}
@@ -37,7 +65,8 @@ func (w *WhisperTranscriber) Close() error {
 // Transcribe processes the f32le PCM file at pcmPath.
 // lang: BCP-47 language code ("he", "en", …) or "auto" for detection.
 // translate: when true, whisper natively outputs English regardless of source language.
-func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang string, translate bool) ([]segment.Segment, error) {
+// onProgress is called with a value in [0,1] as transcription advances; pass nil to silence it.
+func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang string, translate bool, onProgress func(float32)) ([]segment.Segment, error) {
 	samples, err := readF32LE(pcmPath)
 	if err != nil {
 		return nil, fmt.Errorf("read PCM: %w", err)
@@ -48,6 +77,8 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 		return nil, fmt.Errorf("new whisper context: %w", err)
 	}
 
+	ctx.SetThreads(uint(runtime.NumCPU()))
+
 	if lang != "" && lang != "auto" {
 		if err := ctx.SetLanguage(lang); err != nil {
 			return nil, fmt.Errorf("set language %q: %w", lang, err)
@@ -55,7 +86,16 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	}
 	ctx.SetTranslate(translate)
 
-	if err := ctx.Process(samples, nil, nil, nil); err != nil {
+	restore := muteStderr()
+	var progressCb whisper.ProgressCallback
+	if onProgress != nil {
+		progressCb = func(pct int) {
+			onProgress(float32(pct) / 100)
+		}
+	}
+	err = ctx.Process(samples, nil, nil, progressCb)
+	restore()
+	if err != nil {
 		return nil, fmt.Errorf("whisper process: %w", err)
 	}
 
