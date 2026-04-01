@@ -9,7 +9,7 @@ audio_filter: true   # loudness normalisation + speech bandpass (200–3000 Hz)
 
 # transcription
 beam_size: 10        # beam search width — higher = more accurate, slower
-vad: true            # voice activity detection — strips silence/noise
+vad: false           # voice activity detection — requires a separate silero VAD model file
 prompt: ""           # optional initial prompt to guide whisper (e.g. domain vocabulary)
 
 # post-processing

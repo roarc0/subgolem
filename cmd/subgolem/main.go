@@ -50,7 +50,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().String("data-dir", "data", "directory for models and temp files")
 	cmd.Flags().Bool("audio-filter", true, "apply loudness normalisation and speech bandpass filter (FFmpeg)")
 	cmd.Flags().Int("beam-size", 10, "whisper beam search width (larger = more accurate, slower)")
-	cmd.Flags().Bool("vad", true, "enable voice activity detection (strips silence/noise)")
+	cmd.Flags().Bool("vad", false, "enable voice activity detection — requires --vad-model path")
 	cmd.Flags().String("prompt", "", "initial prompt to guide whisper (e.g. domain vocabulary)")
 	cmd.Flags().Bool("clean", true, "strip whisper hallucination artifacts ([Music], ♪, etc.)")
 	cmd.Flags().Duration("merge-gap", 600*time.Millisecond, "merge segments closer than this gap (0 = disabled)")
