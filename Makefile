@@ -10,7 +10,7 @@ VULKAN_OK := $(shell (command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo >/dev/
 
 ifeq ($(VULKAN_OK),1)
   CMAKE_FLAGS    := -DGGML_VULKAN=ON
-  VULKAN_LDFLAGS := -lvulkan
+  VULKAN_LDFLAGS := -L$(PWD)/$(WHISPER_BUILD)/ggml/src/ggml-vulkan -lggml-vulkan -lvulkan
   $(info [subgolem] Vulkan detected — GPU acceleration enabled)
 else
   CMAKE_FLAGS    :=
@@ -19,8 +19,12 @@ else
 endif
 
 CGO_CFLAGS_VAL  := -I$(PWD)/$(WHISPER_SRC)/include -I$(PWD)/$(WHISPER_SRC)/ggml/include
-CGO_LDFLAGS_VAL := -L$(PWD)/$(WHISPER_BUILD)/src -L$(PWD)/$(WHISPER_BUILD)/ggml/src \
-                   -lwhisper -lggml -lstdc++ -lm $(VULKAN_LDFLAGS)
+CGO_LDFLAGS_VAL := -L$(PWD)/$(WHISPER_BUILD)/src \
+                   -L$(PWD)/$(WHISPER_BUILD)/ggml/src \
+                   -L$(PWD)/$(WHISPER_BUILD)/ggml/src/ggml-vulkan \
+                   -lwhisper -lggml -lggml-base -lggml-cpu \
+                   $(VULKAN_LDFLAGS) \
+                   -lstdc++ -lm -fopenmp
 
 .PHONY: all setup build build-cpu test clean clean-all help
 
@@ -42,7 +46,7 @@ $(WHISPER_LIB): $(WHISPER_SRC)
 		-DWHISPER_BUILD_TESTS=OFF \
 		-DWHISPER_BUILD_EXAMPLES=OFF \
 		$(CMAKE_FLAGS)
-	cmake --build $(WHISPER_BUILD) --target whisper -j$$(nproc)
+	cmake --build $(WHISPER_BUILD) -j$$(nproc)
 
 go.work: $(WHISPER_SRC)
 	go work init . $(WHISPER_SRC)/bindings/go
@@ -62,10 +66,10 @@ build-cpu: $(WHISPER_SRC) go.work
 		-DBUILD_SHARED_LIBS=OFF \
 		-DWHISPER_BUILD_TESTS=OFF \
 		-DWHISPER_BUILD_EXAMPLES=OFF
-	cmake --build $(WHISPER_BUILD) --target whisper -j$$(nproc)
+	cmake --build $(WHISPER_BUILD) -j$$(nproc)
 	mkdir -p bin
 	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
-	CGO_LDFLAGS="-L$(PWD)/$(WHISPER_BUILD)/src -L$(PWD)/$(WHISPER_BUILD)/ggml/src -lwhisper -lggml -lstdc++ -lm" \
+	CGO_LDFLAGS="-L$(PWD)/$(WHISPER_BUILD)/src -L$(PWD)/$(WHISPER_BUILD)/ggml/src -L$(PWD)/$(WHISPER_BUILD)/ggml/src/ggml-vulkan -lwhisper -lggml -lggml-base -lggml-cpu -lstdc++ -lm -fopenmp" \
 	go build -o bin/subgolem ./cmd/subgolem/
 
 ## test     — run unit tests (does NOT require setup)

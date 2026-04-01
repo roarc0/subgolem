@@ -55,7 +55,7 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	}
 	ctx.SetTranslate(translate)
 
-	if err := ctx.Process(samples, nil, nil); err != nil {
+	if err := ctx.Process(samples, nil, nil, nil); err != nil {
 		return nil, fmt.Errorf("whisper process: %w", err)
 	}
 
