@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -197,6 +198,9 @@ func run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("open tty: %w", err)
 		}
+		// Tell lipgloss to detect colors from the tty, not from stdout/stderr
+		// (which will be redirected to /dev/null by muteCLibOutput below).
+		lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(tty))
 
 		restoreFds := muteCLibOutput()
 		p := tea.NewProgram(newTUIModel(cfg),
