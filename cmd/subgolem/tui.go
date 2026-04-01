@@ -74,7 +74,21 @@ type dlProgressMsg struct {
 	total int64
 }
 
+type exProgressMsg struct{ pct float32 }
 type txProgressMsg struct{ pct float32 }
+
+// exProgressCh streams audio extraction progress into the TUI event loop.
+type exProgressCh chan exProgressMsg
+
+func (ch exProgressCh) wait() tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
 
 // dlProgressCh streams download progress into the TUI event loop.
 type dlProgressCh chan dlProgressMsg
@@ -155,9 +169,11 @@ type tuiModel struct {
 	steps   [numSteps]stepState
 	current int
 	spinner spinner.Model
-	prog    progress.Model
+	prog    progress.Model // reused for all progress bars
 	dlCh    dlProgressCh
 	dlPct   float64
+	exCh    exProgressCh
+	exPct   float64
 	txCh    txProgressCh
 	txPct   float64
 	pipe    *pipeState // shared across bubbletea value copies
@@ -180,6 +196,7 @@ func newTUIModel(cfg PipelineConfig) tuiModel {
 		spinner: s,
 		prog:    p,
 		dlCh:    make(dlProgressCh, 256),
+		exCh:    make(exProgressCh, 256),
 		txCh:    make(txProgressCh, 256),
 		pipe:    &pipeState{},
 		mgr:     models.NewManager(cfg.DataDir),
@@ -214,6 +231,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		progCmd := m.prog.SetPercent(m.dlPct)
 		return m, tea.Batch(progCmd, m.dlCh.wait())
 
+	case exProgressMsg:
+		m.exPct = float64(msg.pct)
+		progCmd := m.prog.SetPercent(m.exPct)
+		return m, tea.Batch(progCmd, m.exCh.wait())
+
 	case txProgressMsg:
 		m.txPct = float64(msg.pct)
 		progCmd := m.prog.SetPercent(m.txPct)
@@ -234,10 +256,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.current = next
 		m.steps[next].status = statusRunning
+		if next == stepExtract {
+			m.exPct = 0
+			m.exCh = make(exProgressCh, 256)
+		}
 		if next == stepTranscribe {
 			m.txPct = 0
 			m.txCh = make(txProgressCh, 256)
 		}
+		// reset progress bar to 0 for the incoming step
+		progCmd, _ := m.prog.Update(m.prog.SetPercent(0))
+		m.prog = progCmd.(progress.Model)
 		return m, m.cmdForStep(next)
 
 	case stepErrMsg:
@@ -292,10 +321,7 @@ func (m tuiModel) View() string {
 		}
 		b.WriteString(fmt.Sprintf("  %s  %s\n", icon, label))
 
-		if i == stepDownload && s.status == statusRunning {
-			b.WriteString("\n  " + m.prog.View() + "\n\n")
-		}
-		if i == stepTranscribe && s.status == statusRunning {
+		if s.status == statusRunning && (i == stepDownload || i == stepExtract || i == stepTranscribe) {
 			b.WriteString("\n  " + m.prog.View() + "\n\n")
 		}
 	}
@@ -357,23 +383,41 @@ func (m tuiModel) cmdDownload() tea.Cmd {
 func (m tuiModel) cmdExtract() tea.Cmd {
 	cfg := m.cfg
 	pipe := m.pipe
+	ch := m.exCh
 
-	return func() tea.Msg {
-		ctx, cancel := context.WithCancel(context.Background())
-		pipe.cancel = cancel
-		defer cancel()
+	return tea.Batch(
+		func() tea.Msg {
+			ctx, cancel := context.WithCancel(context.Background())
+			pipe.cancel = cancel
+			defer cancel()
 
-		tmpDir := filepath.Join(cfg.DataDir, "tmp")
-		if err := os.MkdirAll(tmpDir, 0755); err != nil {
-			return stepErrMsg{stepExtract, err}
-		}
+			tmpDir := filepath.Join(cfg.DataDir, "tmp")
+			if err := os.MkdirAll(tmpDir, 0755); err != nil {
+				close(ch)
+				return stepErrMsg{stepExtract, err}
+			}
 
-		pcmPath := filepath.Join(tmpDir, "audio.pcm")
-		if err := audio.NewExtractor(cfg.AudioFilter).Extract(ctx, cfg.InputPath, pcmPath); err != nil {
-			return stepErrMsg{stepExtract, err}
-		}
-		return stepDoneMsg{stepExtract, ""}
-	}
+			pcmPath := filepath.Join(tmpDir, "audio.pcm")
+			err := audio.NewExtractor(cfg.AudioFilter).Extract(ctx, cfg.InputPath, pcmPath, func(done, total time.Duration) {
+				if total > 0 {
+					pct := float32(done) / float32(total)
+					if pct > 1 {
+						pct = 1
+					}
+					select {
+					case ch <- exProgressMsg{pct}:
+					default:
+					}
+				}
+			})
+			close(ch)
+			if err != nil {
+				return stepErrMsg{stepExtract, err}
+			}
+			return stepDoneMsg{stepExtract, ""}
+		},
+		ch.wait(),
+	)
 }
 
 func (m tuiModel) cmdTranscribe() tea.Cmd {
