@@ -1,0 +1,7 @@
+*.mp4
+data/
+bin/
+go.work
+go.work.sum
+*.o
+*.a

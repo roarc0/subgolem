@@ -1,0 +1,10 @@
+model: large-v3
+language: auto
+translator: whisper
+gpu: true
+data_dir: data
+
+openai:
+  base_url: http://localhost:1234/v1
+  api_key: ""
+  model: gpt-4o-mini
