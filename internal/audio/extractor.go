@@ -33,7 +33,10 @@ func (e *Extractor) Extract(ctx context.Context, inputPath, outputPath string, o
 
 	args := []string{"-i", inputPath, "-vn", "-ar", "16000", "-ac", "1"}
 	if e.audioFilter {
-		args = append(args, "-af", "loudnorm,highpass=f=200,lowpass=f=3000")
+		// loudnorm: normalise loudness for consistent input levels
+		// highpass=200: remove low-frequency rumble (AC hum, wind, handling noise)
+		// No lowpass — cutting high frequencies degrades consonants and causes ASR hallucinations
+		args = append(args, "-af", "loudnorm,highpass=f=200")
 	}
 	if onProgress != nil {
 		args = append(args, "-progress", "pipe:1", "-nostats")

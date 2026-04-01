@@ -51,7 +51,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().Bool("gpu", true, "enable Vulkan GPU acceleration")
 	cmd.Flags().String("data-dir", "data", "directory for models and temp files")
 	cmd.Flags().Bool("audio-filter", true, "apply loudness normalisation and speech bandpass filter (FFmpeg)")
-	cmd.Flags().Int("beam-size", 10, "whisper beam search width (larger = more accurate, slower)")
+	cmd.Flags().Int("beam-size", 5, "whisper beam search width (default 5; higher values increase hallucination risk)")
 	cmd.Flags().Bool("vad", false, "enable voice activity detection — requires --vad-model path")
 	cmd.Flags().String("prompt", "", "initial prompt to guide whisper (e.g. domain vocabulary)")
 	cmd.Flags().Bool("clean", true, "strip whisper hallucination artifacts ([Music], ♪, etc.)")
