@@ -4,6 +4,11 @@ translator: whisper
 gpu: true
 data_dir: data
 
+beam_size: 10
+vad: true
+merge_gap: 600ms
+merge_chars: 80
+
 openai:
   base_url: http://localhost:1234/v1
   api_key: ""
