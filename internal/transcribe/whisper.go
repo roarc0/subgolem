@@ -82,10 +82,6 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	}
 
 	ctx.SetThreads(uint(runtime.NumCPU()))
-	ctx.SetTokenTimestamps(true)
-	ctx.SetSplitOnWord(true)
-	ctx.SetTemperature(0)
-	ctx.SetTemperatureFallback(0)
 	if w.beamSize > 0 {
 		ctx.SetBeamSize(w.beamSize)
 	}
