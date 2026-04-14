@@ -10,10 +10,10 @@ audio_filter: true   # loudness normalisation + speech bandpass (200–3000 Hz)
 # transcription
 beam_size: 0         # 0 = use whisper internal default (no override); higher values increase hallucination risk
 vad: false           # voice activity detection — requires a separate silero VAD model file
-prompt: ""           # optional initial prompt to guide whisper (e.g. domain vocabulary)
+prompt: "hebrew to english"           # optional initial prompt to guide whisper (e.g. domain vocabulary)
 
 # post-processing
-clean: true          # strip hallucination artifacts ([Music], ♪, repeated phrases)
+clean: false          # strip hallucination artifacts ([Music], ♪, repeated phrases)
 merge_gap: 1s        # merge consecutive segments with gap ≤ this value
 merge_chars: 80      # max characters per merged segment
 split_chars: 80      # split segments longer than this (0 = disabled)

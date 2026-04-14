@@ -75,7 +75,11 @@ type dlProgressMsg struct {
 }
 
 type exProgressMsg struct{ pct float32 }
-type txProgressMsg struct{ pct float32 }
+type txProgressMsg struct {
+	pct         float32
+	chunk       int
+	totalChunks int
+}
 
 // exProgressCh streams audio extraction progress into the TUI event loop.
 type exProgressCh chan exProgressMsg
@@ -176,6 +180,8 @@ type tuiModel struct {
 	exPct   float64
 	txCh    txProgressCh
 	txPct   float64
+	txChunk int
+	txTotal int
 	pipe    *pipeState // shared across bubbletea value copies
 	mgr     *models.Manager
 	done    bool
@@ -238,6 +244,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case txProgressMsg:
 		m.txPct = float64(msg.pct)
+		m.txChunk = msg.chunk
+		m.txTotal = msg.totalChunks
 		progCmd := m.prog.SetPercent(m.txPct)
 		return m, tea.Batch(progCmd, m.txCh.wait())
 
@@ -306,6 +314,9 @@ func (m tuiModel) View() string {
 		case statusRunning:
 			icon = m.spinner.View()
 			label = stepLabels[i]
+			if i == stepTranscribe && m.txTotal > 0 {
+				label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.txChunk, m.txTotal))
+			}
 		case statusDone:
 			icon = styleGreen.Render("✓")
 			label = stepLabels[i]
@@ -442,9 +453,9 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			}
 			defer t.Close()
 
-			segs, err := t.Transcribe(ctx, pcmPath, cfg.Lang, useTranslation, func(pct float32) {
+			segs, err := t.Transcribe(ctx, pcmPath, cfg.Lang, useTranslation, func(pct float32, chunk int, total int) {
 				select {
-				case ch <- txProgressMsg{pct}:
+				case ch <- txProgressMsg{pct, chunk, total}:
 				default:
 				}
 			})

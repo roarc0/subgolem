@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 
@@ -69,8 +70,8 @@ func (w *WhisperTranscriber) Close() error {
 // Transcribe processes the f32le PCM file at pcmPath.
 // lang: BCP-47 language code ("he", "en", …) or "auto" for detection.
 // translate: when true, whisper natively outputs English regardless of source language.
-// onProgress is called with a value in [0,1] as transcription advances; pass nil to silence it.
-func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang string, translate bool, onProgress func(float32)) ([]segment.Segment, error) {
+// onProgress is called with a value in [0,1] as transcription advances, along with chunk status; pass nil to silence it.
+func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang string, translate bool, onProgress func(float32, int, int)) ([]segment.Segment, error) {
 	samples, err := readF32LE(pcmPath)
 	if err != nil {
 		return nil, fmt.Errorf("read PCM: %w", err)
@@ -99,35 +100,59 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	}
 	ctx.SetTranslate(translate)
 
-	restore := muteStderr()
-	var progressCb whisper.ProgressCallback
-	if onProgress != nil {
-		progressCb = func(pct int) {
-			onProgress(float32(pct) / 100)
-		}
-	}
-	err = ctx.Process(samples, nil, nil, progressCb)
-	restore()
-	if err != nil {
-		return nil, fmt.Errorf("whisper process: %w", err)
-	}
+	var allSegs []segment.Segment
+	totalSamples := len(samples)
+	const sampleRate = 16000
+	const maxSeqSecs = 300 // 5 minutes block size
+	blockSize := maxSeqSecs * sampleRate
 
-	var segs []segment.Segment
-	for {
-		s, err := ctx.NextSegment()
-		if err == io.EOF {
-			break
+	totalChunks := (totalSamples + blockSize - 1) / blockSize
+
+	restore := muteStderr()
+	defer restore()
+
+	for start := 0; start < totalSamples; start += blockSize {
+		end := start + blockSize
+		if end > totalSamples {
+			end = totalSamples
 		}
+
+		currentChunk := (start / blockSize) + 1
+		chunk := samples[start:end]
+
+		var progressCb whisper.ProgressCallback
+		if onProgress != nil {
+			progressCb = func(pct int) {
+				// map chunk percentage to global progress
+				globalPct := (float32(start) + (float32(pct)/100.0)*float32(end-start)) / float32(totalSamples)
+				onProgress(globalPct, currentChunk, totalChunks)
+			}
+		}
+
+		err = ctx.Process(chunk, nil, nil, progressCb)
 		if err != nil {
-			return nil, fmt.Errorf("next segment: %w", err)
+			return nil, fmt.Errorf("whisper process chunk %d: %w", start/blockSize, err)
 		}
-		segs = append(segs, segment.Segment{
-			Start: s.Start,
-			End:   s.End,
-			Text:  strings.TrimSpace(s.Text),
-		})
+
+		timeOffsetMilli := int64(start) * 1000 / int64(sampleRate)
+		timeOffset := time.Duration(timeOffsetMilli) * time.Millisecond
+
+		for {
+			s, err := ctx.NextSegment()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("next segment: %w", err)
+			}
+			allSegs = append(allSegs, segment.Segment{
+				Start: s.Start + timeOffset,
+				End:   s.End + timeOffset,
+				Text:  strings.TrimSpace(s.Text),
+			})
+		}
 	}
-	return segs, nil
+	return allSegs, nil
 }
 
 // readF32LE reads a raw 32-bit float little-endian PCM file into float32 samples.
