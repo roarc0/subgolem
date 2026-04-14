@@ -19,13 +19,15 @@ echo "Latest release: $LATEST"
 
 # 2. Download the prebuilt Linux + Vulkan binary bundle
 mkdir -p "$BIN_DIR"
-ARCHIVE="llama-${LATEST}-bin-ubuntu-vulkan-x64.zip"
+ARCHIVE="llama-${LATEST}-bin-ubuntu-vulkan-x64.tar.gz"
 ARCHIVE_URL="https://github.com/ggerganov/llama.cpp/releases/download/${LATEST}/${ARCHIVE}"
 
 if [ ! -f "$BIN_DIR/llama-server" ]; then
     echo "Downloading prebuilt binary: $ARCHIVE ..."
     curl -L --progress-bar "$ARCHIVE_URL" -o "$BIN_DIR/$ARCHIVE"
-    unzip -jo "$BIN_DIR/$ARCHIVE" "*/llama-server" -d "$BIN_DIR/"
+    tar -xzf "$BIN_DIR/$ARCHIVE" -C "$BIN_DIR/" --wildcards '*/llama-server' --strip-components=1 2>/dev/null \
+        || tar -xzf "$BIN_DIR/$ARCHIVE" -C "$BIN_DIR/" llama-server 2>/dev/null \
+        || tar -xzf "$BIN_DIR/$ARCHIVE" -C "$BIN_DIR/"
     chmod +x "$BIN_DIR/llama-server"
     rm "$BIN_DIR/$ARCHIVE"
     echo "✓ llama-server ready at $BIN_DIR/llama-server"
