@@ -1,44 +1,47 @@
 # subgolem
 
-Generate English SRT subtitles from non-English video using a local [whisper.cpp](https://github.com/ggml-org/whisper.cpp) model.
+Local transcription and English subtitle refinement.
+
+Generate polished English SRT subtitles quickly and privately using local [whisper.cpp](https://github.com/ggml-org/whisper.cpp) models and LLM refinement pass.
+
+## Key Features
+
+- **Local-First**: Transcription and refinement occur entirely on your machine.
+- **Vulkan Accelerated**: Auto-detects GPU support for both Whisper and LLMs.
+- **Combined Pipeline**: Translates and polishes subtitles in a single context-aware pass.
+- **HF Integration**: Supports dynamic model downloading from Hugging Face.
 
 ## Requirements
 
 - Go 1.21+
 - CMake 3.16+
 - FFmpeg (must be on `$PATH`)
-- GCC / clang
-- (Optional) Vulkan SDK for GPU acceleration — auto-detected
+- (Optional) Vulkan SDK for GPU acceleration
 
 ## Setup
 
 ```sh
-make setup   # downloads whisper.cpp source and builds the C library
+make setup   # downloads whisper.cpp source and builds the static library
+make build   # produces bin/subgolem
 ```
 
-This only needs to run once. The built library lives in `data/whisper-src/`.
+---
 
-## Build
+## 5-Step Pipeline
 
-```sh
-make build
-```
+1. **Extracting audio**: High-speed extraction with FFT normalisation and bandpass filtering.
+2. **Downloading whisper model**: Efficiently manages local model storage and Hugging Face pulls.
+3. **Transcribing**: Multi-threaded local inference via `whisper.cpp`.
+4. **Writing subtitles**: Initial output of original language transcription.
+5. **Translating and refining**: Single-pass LLM pass to translate and polish into natural English.
 
-Output binary: `bin/subgolem`
+---
 
-Force CPU-only build (skips Vulkan detection):
-
-```sh
-make build-cpu
-```
-
-## Run
+## Usage
 
 ```sh
 bin/subgolem -i video.mkv
 ```
-
-The model is downloaded automatically on first run (to `data/models/`).
 
 ### Options
 
@@ -46,55 +49,62 @@ The model is downloaded automatically on first run (to `data/models/`).
 |------|---------|-------------|
 | `-i` | — | Input video or audio file (required) |
 | `-o` | `<input>.srt` | Output SRT file |
-| `--model` | `large-v3` | Whisper model: `tiny`, `base`, `small`, `medium`, `large-v3` |
+| `--model` | `large-v3` | Model name or Hugging Face key (e.g. `ivrit-ai/whisper-large-v3-ggml`) |
 | `--language` | `auto` | Source language code (e.g. `he`, `en`) or `auto` |
-| `--translator` | `whisper` | Translation backend: `whisper` or `openai` |
 | `--data-dir` | `data` | Directory for models and temp files |
 
-### Examples
+### Post-Processing
+Subgolem can automatically clean up Whisper hallucinations, merge short segments, and fix timing overlaps. Enable these in `config.yaml`.
 
-```sh
-# Hebrew video → English SRT (default)
-bin/subgolem -i movie.mkv
+---
 
-# Explicit language, custom output path
-bin/subgolem -i movie.mkv -o subs/movie.srt --language he
-
-# Use OpenAI / LM Studio for translation instead
-bin/subgolem -i movie.mkv --translator openai
-```
-
-## Configuration
-
-Create `config.yaml` in the working directory to persist settings:
+## Configuration (`config.yaml`)
 
 ```yaml
-model: large-v3
+model: ivrit-ai/whisper-large-v3-ggml
 language: auto
-translator: whisper
 data_dir: data
 
-openai:
-  base_url: http://localhost:1234/v1
-  api_key: ""
-  model: gpt-4o-mini
+# Transcriber settings
+beam_size: 0
+chunk_size: 300
+prompt: "hebrew to english"
+
+# LLM Refinement & Translation
+llm_refine:
+  enabled: true
+  backend: "llamacpp"   # 'ollama' or 'llamacpp'
+  
+  # Custom prompt support with dynamic language detection
+  prompt: "Translate from {{.SourceLang}} to natural, idiomatic English. Preserve meaning and fix grammar..."
+
+# Custom HF Model Mapping
+whisper_models:
+  ivrit-ai/whisper-large-v3-ggml: "https://huggingface.co/ivrit-ai/whisper-large-v3-ggml/resolve/main/ggml-model.bin"
 ```
 
-Environment variables override config values: `SUBGOLEM_MODEL`, `SUBGOLEM_LANGUAGE`, etc.
+---
 
-## GPU Acceleration
+## LLM Refinement Setup
 
-Vulkan is auto-detected at build time via `vulkaninfo` or `ldconfig`. No extra configuration needed — if Vulkan is available, it will be used.
+The refinement pass requires a local OpenAI-compatible API.
 
-## Tests
-
+### Option A: llama.cpp (Recommended for Vulkan/GPU)
+Run the included setup script:
 ```sh
-make test   # does not require make setup
+scripts/setup-llamacpp.sh
+make llm-server
 ```
 
-## Clean
+### Option B: Ollama
+Ensure Ollama is running, and set `backend: "ollama"` in `config.yaml`.
+
+---
+
+## Maintenance
 
 ```sh
-make clean      # removes bin/ and whisper build artifacts
+make clean      # removes binaries and builds
 make clean-all  # removes everything including downloaded models
+make test       # runs core logic tests
 ```
