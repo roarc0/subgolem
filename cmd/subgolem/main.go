@@ -196,6 +196,12 @@ func run(cmd *cobra.Command, args []string) error {
 			FixOverlaps:   viper.GetBool("fix_overlaps"),
 			FileIndex:     i + 1,
 			FileCount:     len(files),
+			RefinerEnabled: viper.GetBool("llm_refine.enabled"),
+			RefinerBaseURL: viper.GetString("llm_refine.base_url"),
+			RefinerAPIKey:  viper.GetString("llm_refine.api_key"),
+			RefinerModel:   viper.GetString("llm_refine.model"),
+			RefinerChunk:   viper.GetInt("llm_refine.chunk_size"),
+			RefinerPrompt:  viper.GetString("llm_refine.prompt"),
 		}
 
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)

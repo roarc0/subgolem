@@ -15,6 +15,7 @@ import (
 
 	"github.com/roarc0/subgolem/internal/audio"
 	"github.com/roarc0/subgolem/internal/models"
+	"github.com/roarc0/subgolem/internal/refine"
 	intsegment "github.com/roarc0/subgolem/internal/segment"
 	"github.com/roarc0/subgolem/internal/subtitle"
 	"github.com/roarc0/subgolem/internal/transcribe"
@@ -29,6 +30,7 @@ const (
 	stepTranscribe
 	stepTranslate
 	stepWrite
+	stepRefine
 	numSteps
 )
 
@@ -38,6 +40,7 @@ var stepLabels = [numSteps]string{
 	"Transcribing",
 	"Translating",
 	"Writing subtitles",
+	"Refining subtitles",
 }
 
 // ── status ─────────────────────────────────────────────────────────────────
@@ -145,6 +148,12 @@ type PipelineConfig struct {
 	FixOverlaps   bool
 	FileIndex     int // 1-based index when processing multiple files (0 = single file)
 	FileCount     int
+	RefinerEnabled bool
+	RefinerBaseURL string
+	RefinerAPIKey  string
+	RefinerModel   string
+	RefinerChunk   int
+	RefinerPrompt  string
 }
 
 // ── shared pipeline state ──────────────────────────────────────────────────
@@ -259,6 +268,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.steps[msg.idx].status = statusDone
 		m.steps[msg.idx].info = msg.info
 		next := msg.idx + 1
+		
+		if next == stepRefine && !m.cfg.RefinerEnabled {
+			next++
+		}
+
 		if next >= numSteps {
 			m.done = true
 			return m, tea.Quit
@@ -339,7 +353,13 @@ func (m tuiModel) View() string {
 	}
 
 	if m.done {
-		b.WriteString("\n" + styleGreen.Render("  Done! → "+m.cfg.OutputPath) + "\n")
+		b.WriteString("\n" + styleGreen.Render("  ✓  Saved original: "+m.cfg.OutputPath) + "\n")
+		if m.cfg.RefinerEnabled {
+            ext := filepath.Ext(m.cfg.OutputPath)
+            fixedPath := strings.TrimSuffix(m.cfg.OutputPath, ext) + "_fixed" + ext
+			b.WriteString(styleGreen.Render("  ✓  Saved refined:  " + fixedPath) + "\n")
+		}
+		b.WriteString("\n  Done!\n")
 	}
 
 	b.WriteString("\n")
@@ -357,6 +377,8 @@ func (m tuiModel) cmdForStep(idx int) tea.Cmd {
 		return m.cmdTranslate()
 	case stepWrite:
 		return m.cmdWrite()
+	case stepRefine:
+		return m.cmdRefine()
 	}
 	return nil
 }
@@ -523,5 +545,35 @@ func (m tuiModel) cmdWrite() tea.Cmd {
 			return stepErrMsg{stepWrite, err}
 		}
 		return stepDoneMsg{stepWrite, cfg.OutputPath}
+	}
+}
+
+func (m *tuiModel) cmdRefine() tea.Cmd {
+	return func() tea.Msg {
+		rCfg := refine.RefineConfig{
+			BaseURL: m.cfg.RefinerBaseURL,
+			APIKey:  m.cfg.RefinerAPIKey,
+			Model:   m.cfg.RefinerModel,
+			Prompt:  m.cfg.RefinerPrompt,
+			Chunk:   m.cfg.RefinerChunk,
+		}
+		
+		r := refine.NewLlmRefiner(rCfg)
+		refinedStr, err := r.Refine(context.Background(), m.pipe.segments)
+		if err != nil {
+			return stepErrMsg{stepRefine, err}
+		}
+		
+		ext := filepath.Ext(m.cfg.OutputPath)
+		outPath := strings.TrimSuffix(m.cfg.OutputPath, ext) + "_fixed" + ext
+		if ext == "" {
+			outPath = m.cfg.OutputPath + "_fixed.srt"
+		}
+		
+		if err := os.WriteFile(outPath, []byte(refinedStr), 0644); err != nil {
+			return stepErrMsg{stepRefine, err}
+		}
+		
+		return stepDoneMsg{stepRefine, outPath}
 	}
 }

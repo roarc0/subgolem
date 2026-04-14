@@ -24,3 +24,11 @@ openai:
   base_url: http://localhost:1234/v1
   api_key: ""
   model: gpt-4o-mini
+
+llm_refine:
+  enabled: true
+  base_url: http://localhost:11434/v1
+  api_key: "ollama"
+  model: "qwen2.5:7b"
+  chunk_size: 40      # Number of subtitles to process per LLM request
+  prompt: "You are an expert subtitle editor. Here is a chunk of an SRT file. Fix spelling and grammar mistakes. Join short phrases that naturally belong on the same line if possible, adjusting the timestamps accordingly. Do not invent new content, emit chat dialogue, or change the original meaning. Return ONLY the fixed lines in valid SRT format, with no surrounding formatting or code block artifacts."
