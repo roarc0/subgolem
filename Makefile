@@ -26,7 +26,7 @@ CGO_LDFLAGS_VAL := -L$(PWD)/$(WHISPER_BUILD)/src \
                    $(VULKAN_LDFLAGS) \
                    -lstdc++ -lm -fopenmp
 
-.PHONY: all setup build build-cpu run test clean clean-all help
+.PHONY: all setup setup-ollama setup-llamacpp llm-server build build-cpu run test clean clean-all help
 
 all: build
 
@@ -88,7 +88,21 @@ clean:
 
 ## clean-all — remove everything including downloaded models and whisper source
 clean-all:
-	rm -rf bin/ data/models/ data/whisper-src/ go.work go.work.sum
+	rm -rf bin/ data/models/ data/whisper-src/ data/llama-bin/ go.work go.work.sum
+
+## setup-ollama  — install Ollama and pull qwen2.5:7b (CPU inference)
+setup-ollama:
+	./scripts/setup-ollama.sh
+
+## setup-llamacpp — download prebuilt llama.cpp Vulkan binary + Qwen2.5 GGUF model
+setup-llamacpp:
+	./scripts/setup-llamacpp.sh
+
+## llm-server    — start llama.cpp server on :8080 (run after setup-llamacpp)
+llm-server:
+	data/llama-bin/llama-server \
+		-m data/models/qwen2.5-7b-instruct-q4_k_m.gguf \
+		-ngl 99 --port 8080 --ctx-size 4096
 
 ## help     — print available targets
 help:

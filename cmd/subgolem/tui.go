@@ -359,14 +359,19 @@ func (m tuiModel) View() string {
 				label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.txChunk, m.txTotal))
 			}
 			if i == stepRefine {
-				// Show model name and host so user knows what's running
+				// Show backend label (model @ host) while running
 				host := m.cfg.RefinerBaseURL
-				if host == "" {
+				switch host {
+				case "http://localhost:11434/v1":
 					host = "ollama"
+				case "http://localhost:8080/v1":
+					host = "llama.cpp"
 				}
 				label += styleDim.Render(fmt.Sprintf("  %s @ %s", m.cfg.RefinerModel, host))
 				if m.rfTotal > 0 {
 					label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.rfChunk, m.rfTotal))
+				} else {
+					label += styleDim.Render("  waiting for first chunk…")
 				}
 			}
 		case statusDone:
@@ -387,14 +392,22 @@ func (m tuiModel) View() string {
 		if s.status == statusRunning && (i == stepDownload || i == stepExtract || i == stepTranscribe) {
 			b.WriteString("\n  " + m.prog.View() + "\n\n")
 		}
+		// Refine step: show a fraction-based progress bar derived from chunk counter
+		if s.status == statusRunning && i == stepRefine && m.rfTotal > 0 {
+			pct := float64(m.rfChunk) / float64(m.rfTotal)
+			progBar, _ := m.prog.Update(m.prog.SetPercent(pct))
+			if pm, ok := progBar.(progress.Model); ok {
+				b.WriteString("\n  " + pm.View() + "\n\n")
+			}
+		}
 	}
 
 	if m.done {
 		b.WriteString("\n" + styleGreen.Render("  ✓  Saved original: "+m.cfg.OutputPath) + "\n")
 		if m.cfg.RefinerEnabled {
-            ext := filepath.Ext(m.cfg.OutputPath)
-            fixedPath := strings.TrimSuffix(m.cfg.OutputPath, ext) + "_fixed" + ext
-			b.WriteString(styleGreen.Render("  ✓  Saved refined:  " + fixedPath) + "\n")
+			ext := filepath.Ext(m.cfg.OutputPath)
+			fixedPath := strings.TrimSuffix(m.cfg.OutputPath, ext) + "_fixed" + ext
+			b.WriteString(styleGreen.Render("  ✓  Saved refined:  "+fixedPath) + "\n")
 		}
 		b.WriteString("\n  Done!\n")
 	}
