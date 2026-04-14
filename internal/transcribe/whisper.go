@@ -19,10 +19,11 @@ import (
 
 // WhisperTranscriber transcribes audio using a local whisper.cpp model.
 type WhisperTranscriber struct {
-	model    whisper.Model
-	beamSize int
-	vad      bool
-	prompt   string
+	model        whisper.Model
+	beamSize     int
+	vad          bool
+	prompt       string
+	chunkSizeSec int
 }
 
 // muteStderr redirects fd 2 to /dev/null and returns a restore function.
@@ -52,14 +53,14 @@ func muteStderr() func() {
 // NewWhisperTranscriber loads the model at modelPath.
 // beamSize controls beam search width (5 = default, 10 = better accuracy/slower).
 // vad enables voice activity detection to strip silence before processing.
-func NewWhisperTranscriber(modelPath string, beamSize int, vad bool, prompt string) (*WhisperTranscriber, error) {
+func NewWhisperTranscriber(modelPath string, beamSize int, vad bool, prompt string, chunkSizeSec int) (*WhisperTranscriber, error) {
 	restore := muteStderr()
 	m, err := whisper.New(modelPath)
 	restore()
 	if err != nil {
 		return nil, fmt.Errorf("load whisper model %s: %w", modelPath, err)
 	}
-	return &WhisperTranscriber{model: m, beamSize: beamSize, vad: vad, prompt: prompt}, nil
+	return &WhisperTranscriber{model: m, beamSize: beamSize, vad: vad, prompt: prompt, chunkSizeSec: chunkSizeSec}, nil
 }
 
 // Close releases model resources.
@@ -103,7 +104,11 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	var allSegs []segment.Segment
 	totalSamples := len(samples)
 	const sampleRate = 16000
-	const maxSeqSecs = 300 // 5 minutes block size
+
+	maxSeqSecs := w.chunkSizeSec
+	if maxSeqSecs <= 0 {
+		maxSeqSecs = (totalSamples / sampleRate) + 1
+	}
 	blockSize := maxSeqSecs * sampleRate
 
 	totalChunks := (totalSamples + blockSize - 1) / blockSize

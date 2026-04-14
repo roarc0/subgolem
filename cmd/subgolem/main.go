@@ -52,6 +52,7 @@ func newRootCmd() *cobra.Command {
 	cmd.Flags().String("data-dir", "data", "directory for models and temp files")
 	cmd.Flags().Bool("audio-filter", true, "apply loudness normalisation and speech bandpass filter (FFmpeg)")
 	cmd.Flags().Int("beam-size", 0, "whisper beam search width (0 = use whisper internal default)")
+	cmd.Flags().Int("chunk-size", 300, "size of transcription chunks in seconds (0 = disabled)")
 	cmd.Flags().Bool("vad", false, "enable voice activity detection — requires --vad-model path")
 	cmd.Flags().String("prompt", "", "initial prompt to guide whisper (e.g. domain vocabulary)")
 	cmd.Flags().Bool("clean", true, "strip whisper hallucination artifacts ([Music], ♪, etc.)")
@@ -67,6 +68,7 @@ func newRootCmd() *cobra.Command {
 	viper.BindPFlag("data_dir", cmd.Flags().Lookup("data-dir"))
 	viper.BindPFlag("audio_filter", cmd.Flags().Lookup("audio-filter"))
 	viper.BindPFlag("beam_size", cmd.Flags().Lookup("beam-size"))
+	viper.BindPFlag("chunk_size", cmd.Flags().Lookup("chunk-size"))
 	viper.BindPFlag("vad", cmd.Flags().Lookup("vad"))
 	viper.BindPFlag("prompt", cmd.Flags().Lookup("prompt"))
 	viper.BindPFlag("clean", cmd.Flags().Lookup("clean"))
@@ -184,6 +186,7 @@ func run(cmd *cobra.Command, args []string) error {
 			OpenAIModel:   viper.GetString("openai.model"),
 			AudioFilter:   viper.GetBool("audio_filter"),
 			BeamSize:      viper.GetInt("beam_size"),
+			ChunkSize:     viper.GetInt("chunk_size"),
 			VAD:           viper.GetBool("vad"),
 			Prompt:        viper.GetString("prompt"),
 			Clean:         viper.GetBool("clean"),

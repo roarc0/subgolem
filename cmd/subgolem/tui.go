@@ -134,6 +134,7 @@ type PipelineConfig struct {
 	OpenAIAPIKey  string
 	OpenAIModel   string
 	AudioFilter   bool
+	ChunkSize     int
 	Prompt        string
 	BeamSize      int
 	VAD           bool
@@ -446,7 +447,7 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			pcmPath := filepath.Join(cfg.DataDir, "tmp", "audio.pcm")
 			useTranslation := cfg.TranslatorID == "whisper"
 
-			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName), cfg.BeamSize, cfg.VAD, cfg.Prompt)
+			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName), cfg.BeamSize, cfg.VAD, cfg.Prompt, cfg.ChunkSize)
 			if err != nil {
 				close(ch)
 				return stepErrMsg{stepTranscribe, err}
