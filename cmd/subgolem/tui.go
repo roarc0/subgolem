@@ -37,7 +37,7 @@ var stepLabels = [numSteps]string{
 	"Downloading whisper model",
 	"Transcribing",
 	"Writing subtitles",
-	"Refining subtitles",
+	"Translating and refining subtitles",
 }
 
 // ── status ─────────────────────────────────────────────────────────────────
