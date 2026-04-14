@@ -83,6 +83,23 @@ type txProgressMsg struct {
 	chunk       int
 	totalChunks int
 }
+type rfProgressMsg struct {
+	chunk       int
+	totalChunks int
+}
+
+// rfProgressCh streams LLM refine chunk progress into the TUI event loop.
+type rfProgressCh chan rfProgressMsg
+
+func (ch rfProgressCh) wait() tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
 
 // exProgressCh streams audio extraction progress into the TUI event loop.
 type exProgressCh chan exProgressMsg
@@ -192,6 +209,9 @@ type tuiModel struct {
 	txPct   float64
 	txChunk int
 	txTotal int
+	rfCh    rfProgressCh
+	rfChunk int
+	rfTotal int
 	pipe    *pipeState // shared across bubbletea value copies
 	mgr     *models.Manager
 	done    bool
@@ -214,6 +234,7 @@ func newTUIModel(cfg PipelineConfig) tuiModel {
 		dlCh:    make(dlProgressCh, 256),
 		exCh:    make(exProgressCh, 256),
 		txCh:    make(txProgressCh, 256),
+		rfCh:    make(rfProgressCh, 256),
 		pipe:    &pipeState{},
 		mgr:     models.NewManager(cfg.DataDir),
 	}
@@ -258,6 +279,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.txTotal = msg.totalChunks
 		progCmd := m.prog.SetPercent(m.txPct)
 		return m, tea.Batch(progCmd, m.txCh.wait())
+
+	case rfProgressMsg:
+		m.rfChunk = msg.chunk
+		m.rfTotal = msg.totalChunks
+		return m, m.rfCh.wait()
 
 	case progress.FrameMsg:
 		newProg, cmd := m.prog.Update(msg)
@@ -331,6 +357,17 @@ func (m tuiModel) View() string {
 			label = stepLabels[i]
 			if i == stepTranscribe && m.txTotal > 0 {
 				label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.txChunk, m.txTotal))
+			}
+			if i == stepRefine {
+				// Show model name and host so user knows what's running
+				host := m.cfg.RefinerBaseURL
+				if host == "" {
+					host = "ollama"
+				}
+				label += styleDim.Render(fmt.Sprintf("  %s @ %s", m.cfg.RefinerModel, host))
+				if m.rfTotal > 0 {
+					label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.rfChunk, m.rfTotal))
+				}
 			}
 		case statusDone:
 			icon = styleGreen.Render("✓")
@@ -549,31 +586,41 @@ func (m tuiModel) cmdWrite() tea.Cmd {
 }
 
 func (m *tuiModel) cmdRefine() tea.Cmd {
-	return func() tea.Msg {
+	cfg := m.cfg
+	pipe := m.pipe
+	rfCh := m.rfCh
+
+	runFn := func() tea.Msg {
 		rCfg := refine.RefineConfig{
-			BaseURL: m.cfg.RefinerBaseURL,
-			APIKey:  m.cfg.RefinerAPIKey,
-			Model:   m.cfg.RefinerModel,
-			Prompt:  m.cfg.RefinerPrompt,
-			Chunk:   m.cfg.RefinerChunk,
+			BaseURL:   cfg.RefinerBaseURL,
+			APIKey:    cfg.RefinerAPIKey,
+			Model:     cfg.RefinerModel,
+			Prompt:    cfg.RefinerPrompt,
+			Chunk:     cfg.RefinerChunk,
+			OnProgress: func(chunk, total int) {
+				rfCh <- rfProgressMsg{chunk: chunk, totalChunks: total}
+			},
 		}
-		
+
 		r := refine.NewLlmRefiner(rCfg)
-		refinedStr, err := r.Refine(context.Background(), m.pipe.segments)
+		refinedStr, err := r.Refine(context.Background(), pipe.segments)
+		close(rfCh)
 		if err != nil {
 			return stepErrMsg{stepRefine, err}
 		}
-		
-		ext := filepath.Ext(m.cfg.OutputPath)
-		outPath := strings.TrimSuffix(m.cfg.OutputPath, ext) + "_fixed" + ext
+
+		ext := filepath.Ext(cfg.OutputPath)
+		outPath := strings.TrimSuffix(cfg.OutputPath, ext) + "_fixed" + ext
 		if ext == "" {
-			outPath = m.cfg.OutputPath + "_fixed.srt"
+			outPath = cfg.OutputPath + "_fixed.srt"
 		}
-		
+
 		if err := os.WriteFile(outPath, []byte(refinedStr), 0644); err != nil {
 			return stepErrMsg{stepRefine, err}
 		}
-		
+
 		return stepDoneMsg{stepRefine, outPath}
 	}
+
+	return tea.Batch(runFn, rfCh.wait())
 }

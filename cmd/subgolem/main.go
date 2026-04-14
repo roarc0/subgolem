@@ -167,6 +167,34 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown translator %q — valid: whisper, openai", translatorID)
 	}
 
+	// ── LLM refiner backend resolution ──────────────────────────────────────
+	// Each backend has sensible defaults; explicit config fields override them.
+	type backendDefaults struct{ url, key, model string }
+	backendPresets := map[string]backendDefaults{
+		"ollama":   {url: "http://localhost:11434/v1", key: "ollama", model: "qwen2.5:7b"},
+		"llamacpp": {url: "http://localhost:8080/v1", key: "none", model: "qwen2.5-7b-instruct-q4_k_m"},
+	}
+	refinerBackend := viper.GetString("llm_refine.backend")
+	if refinerBackend == "" {
+		refinerBackend = "ollama"
+	}
+	preset, ok := backendPresets[refinerBackend]
+	if !ok {
+		return fmt.Errorf("unknown llm_refine.backend %q — valid: ollama, llamacpp", refinerBackend)
+	}
+	refinerURL := viper.GetString("llm_refine.base_url")
+	if refinerURL == "" {
+		refinerURL = preset.url
+	}
+	refinerKey := viper.GetString("llm_refine.api_key")
+	if refinerKey == "" {
+		refinerKey = preset.key
+	}
+	refinerModel := viper.GetString("llm_refine.model")
+	if refinerModel == "" {
+		refinerModel = preset.model
+	}
+
 	for i, inputPath := range files {
 		out := outputPath
 		if out == "" {
@@ -175,31 +203,31 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 
 		cfg := PipelineConfig{
-			InputPath:     inputPath,
-			OutputPath:    out,
-			ModelName:     viper.GetString("model"),
-			Lang:          viper.GetString("language"),
-			TranslatorID:  translatorID,
-			DataDir:       viper.GetString("data_dir"),
-			OpenAIBaseURL: viper.GetString("openai.base_url"),
-			OpenAIAPIKey:  viper.GetString("openai.api_key"),
-			OpenAIModel:   viper.GetString("openai.model"),
-			AudioFilter:   viper.GetBool("audio_filter"),
-			BeamSize:      viper.GetInt("beam_size"),
-			ChunkSize:     viper.GetInt("chunk_size"),
-			VAD:           viper.GetBool("vad"),
-			Prompt:        viper.GetString("prompt"),
-			Clean:         viper.GetBool("clean"),
-			MergeGap:      viper.GetDuration("merge_gap"),
-			MergeChars:    viper.GetInt("merge_chars"),
-			SplitChars:    viper.GetInt("split_chars"),
-			FixOverlaps:   viper.GetBool("fix_overlaps"),
-			FileIndex:     i + 1,
-			FileCount:     len(files),
+			InputPath:      inputPath,
+			OutputPath:     out,
+			ModelName:      viper.GetString("model"),
+			Lang:           viper.GetString("language"),
+			TranslatorID:   translatorID,
+			DataDir:        viper.GetString("data_dir"),
+			OpenAIBaseURL:  viper.GetString("openai.base_url"),
+			OpenAIAPIKey:   viper.GetString("openai.api_key"),
+			OpenAIModel:    viper.GetString("openai.model"),
+			AudioFilter:    viper.GetBool("audio_filter"),
+			BeamSize:       viper.GetInt("beam_size"),
+			ChunkSize:      viper.GetInt("chunk_size"),
+			VAD:            viper.GetBool("vad"),
+			Prompt:         viper.GetString("prompt"),
+			Clean:          viper.GetBool("clean"),
+			MergeGap:       viper.GetDuration("merge_gap"),
+			MergeChars:     viper.GetInt("merge_chars"),
+			SplitChars:     viper.GetInt("split_chars"),
+			FixOverlaps:    viper.GetBool("fix_overlaps"),
+			FileIndex:      i + 1,
+			FileCount:      len(files),
 			RefinerEnabled: viper.GetBool("llm_refine.enabled"),
-			RefinerBaseURL: viper.GetString("llm_refine.base_url"),
-			RefinerAPIKey:  viper.GetString("llm_refine.api_key"),
-			RefinerModel:   viper.GetString("llm_refine.model"),
+			RefinerBaseURL: refinerURL,
+			RefinerAPIKey:  refinerKey,
+			RefinerModel:   refinerModel,
 			RefinerChunk:   viper.GetInt("llm_refine.chunk_size"),
 			RefinerPrompt:  viper.GetString("llm_refine.prompt"),
 		}

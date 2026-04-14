@@ -27,8 +27,19 @@ openai:
 
 llm_refine:
   enabled: true
-  base_url: http://localhost:11434/v1
-  api_key: "ollama"
-  model: "qwen2.5:7b"
+
+  # backend selects which local LLM server to use.
+  # Supported values:
+  #   ollama    — Ollama (CPU only unless ROCm installed). Default URL: http://localhost:11434/v1
+  #   llamacpp  — llama.cpp server with Vulkan GPU. Default URL: http://localhost:8080/v1
+  #               Run: scripts/setup-llamacpp.sh  to build and start it.
+  backend: "ollama"
+
+  # Override the auto-detected URL/key/model if you need a custom endpoint
+  # (e.g. a hosted OpenAI-compatible API).  Leave empty to use backend defaults.
+  base_url: ""
+  api_key:  ""
+  model:    ""
+
   chunk_size: 40      # Number of subtitles to process per LLM request
   prompt: "You are an expert subtitle editor. Here is a chunk of an SRT file. Fix spelling and grammar mistakes. Join short phrases that naturally belong on the same line if possible, adjusting the timestamps accordingly. Do not invent new content, emit chat dialogue, or change the original meaning. Return ONLY the fixed lines in valid SRT format, with no surrounding formatting or code block artifacts."
