@@ -19,26 +19,23 @@ import (
 	intsegment "github.com/roarc0/subgolem/internal/segment"
 	"github.com/roarc0/subgolem/internal/subtitle"
 	"github.com/roarc0/subgolem/internal/transcribe"
-	"github.com/roarc0/subgolem/internal/translate"
 )
 
 // ── pipeline step indices ──────────────────────────────────────────────────
 
 const (
-	stepDownload = iota
-	stepExtract
+	stepExtract = iota
+	stepDownload
 	stepTranscribe
-	stepTranslate
 	stepWrite
 	stepRefine
 	numSteps
 )
 
 var stepLabels = [numSteps]string{
-	"Downloading model",
 	"Extracting audio",
+	"Downloading whisper model",
 	"Transcribing",
-	"Translating",
 	"Writing subtitles",
 	"Refining subtitles",
 }
@@ -144,42 +141,38 @@ func (ch txProgressCh) wait() tea.Cmd {
 
 // PipelineConfig holds all runtime configuration for a run.
 type PipelineConfig struct {
-	InputPath     string
-	OutputPath    string
-	ModelName     string
-	Lang          string
-	TranslatorID  string
-	DataDir       string
-	OpenAIBaseURL string
-	OpenAIAPIKey  string
-	OpenAIModel   string
-	AudioFilter   bool
-	ChunkSize     int
-	Prompt        string
-	BeamSize      int
-	VAD           bool
-	Clean         bool
-	MergeGap      time.Duration // 0 = no merging
-	MergeChars    int
-	SplitChars    int // 0 = disabled
-	FixOverlaps   bool
-	FileIndex     int // 1-based index when processing multiple files (0 = single file)
-	FileCount     int
+	InputPath      string
+	OutputPath     string
+	ModelName      string
+	Lang           string
+	DataDir        string
+	AudioFilter    bool
+	ChunkSize      int
+	Prompt         string
+	BeamSize       int
+	VAD            bool
+	Clean          bool
+	MergeGap       time.Duration // 0 = no merging
+	MergeChars     int
+	SplitChars     int // 0 = disabled
+	FixOverlaps    bool
+	FileIndex      int // 1-based index when processing multiple files (0 = single file)
+	FileCount      int
 	RefinerEnabled bool
 	RefinerBaseURL string
 	RefinerAPIKey  string
 	RefinerModel   string
 	RefinerChunk   int
 	RefinerPrompt  string
+	WhisperModels  map[string]string
 }
 
 // ── shared pipeline state ──────────────────────────────────────────────────
 
-// pipeState is heap-allocated so commands (closures) and the model share it
-// across bubbletea's value-copy semantics.
 type pipeState struct {
-	segments []intsegment.Segment
-	cancel   context.CancelFunc
+	segments   []intsegment.Segment
+	sourceLang string
+	cancel     context.CancelFunc
 }
 
 // ── styles ─────────────────────────────────────────────────────────────────
@@ -203,6 +196,8 @@ type tuiModel struct {
 	prog    progress.Model // reused for all progress bars
 	dlCh    dlProgressCh
 	dlPct   float64
+	dlDone  int64
+	dlTotal int64
 	exCh    exProgressCh
 	exPct   float64
 	txCh    txProgressCh
@@ -212,6 +207,7 @@ type tuiModel struct {
 	rfCh    rfProgressCh
 	rfChunk int
 	rfTotal int
+	rfPct   float64
 	pipe    *pipeState // shared across bubbletea value copies
 	mgr     *models.Manager
 	done    bool
@@ -236,13 +232,13 @@ func newTUIModel(cfg PipelineConfig) tuiModel {
 		txCh:    make(txProgressCh, 256),
 		rfCh:    make(rfProgressCh, 256),
 		pipe:    &pipeState{},
-		mgr:     models.NewManager(cfg.DataDir),
+		mgr:     models.NewManager(cfg.DataDir, cfg.WhisperModels),
 	}
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	m.steps[stepDownload].status = statusRunning
-	return tea.Batch(m.spinner.Tick, m.cmdDownload())
+	m.steps[stepExtract].status = statusRunning
+	return tea.Batch(m.spinner.Tick, m.cmdExtract())
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -262,8 +258,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case dlProgressMsg:
+		m.dlDone = msg.done
+		m.dlTotal = msg.total
 		if msg.total > 0 {
 			m.dlPct = float64(msg.done) / float64(msg.total)
+		} else {
+			// If total known is 0, we treat it as infinite for the bar but we still want to show bytes
+			m.dlPct = 0
 		}
 		progCmd := m.prog.SetPercent(m.dlPct)
 		return m, tea.Batch(progCmd, m.dlCh.wait())
@@ -283,7 +284,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case rfProgressMsg:
 		m.rfChunk = msg.chunk
 		m.rfTotal = msg.totalChunks
-		return m, m.rfCh.wait()
+		if m.rfTotal > 0 {
+			m.rfPct = float64(m.rfChunk) / float64(m.rfTotal)
+		}
+		progCmd := m.prog.SetPercent(m.rfPct)
+		return m, tea.Batch(progCmd, m.rfCh.wait())
 
 	case progress.FrameMsg:
 		newProg, cmd := m.prog.Update(msg)
@@ -294,7 +299,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.steps[msg.idx].status = statusDone
 		m.steps[msg.idx].info = msg.info
 		next := msg.idx + 1
-		
+
 		if next == stepRefine && !m.cfg.RefinerEnabled {
 			next++
 		}
@@ -303,13 +308,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = true
 			return m, tea.Quit
 		}
-		m.current = next
-		m.steps[next].status = statusRunning
-		if next == stepExtract {
+		if next < numSteps {
+			m.current = next
+			m.steps[next].status = statusRunning
+			// Reset progress bar for next step
+			m.dlPct = 0
 			m.exPct = 0
-			m.exCh = make(exProgressCh, 256)
-		}
-		if next == stepTranscribe {
 			m.txPct = 0
 			m.txCh = make(txProgressCh, 256)
 		}
@@ -337,12 +341,11 @@ func (m tuiModel) View() string {
 	}
 	b.WriteString(styleTitle.Render(title) + "\n\n")
 
-	meta := fmt.Sprintf("  %s  →  %s   model: %s · lang: %s · translator: %s",
+	meta := fmt.Sprintf("  %s  →  %s   model: %s · lang: %s",
 		styleMeta.Render(filepath.Base(m.cfg.InputPath)),
 		styleMeta.Render(filepath.Base(m.cfg.OutputPath)),
 		styleMeta.Render(m.cfg.ModelName),
 		styleMeta.Render(m.cfg.Lang),
-		styleMeta.Render(m.cfg.TranslatorID),
 	)
 	b.WriteString(meta + "\n\n")
 
@@ -355,11 +358,23 @@ func (m tuiModel) View() string {
 		case statusRunning:
 			icon = m.spinner.View()
 			label = stepLabels[i]
-			if i == stepTranscribe && m.txTotal > 0 {
-				label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.txChunk, m.txTotal))
-			}
-			if i == stepRefine {
-				// Show backend label (model @ host) while running
+			switch i {
+			case stepDownload:
+				if m.dlDone > 0 {
+					label += styleDim.Render(fmt.Sprintf("  %.1f MB", float64(m.dlDone)/1024/1024))
+					if m.dlTotal > 0 {
+						label += styleDim.Render(fmt.Sprintf(" / %.1f MB", float64(m.dlTotal)/1024/1024))
+					} else {
+						label += styleDim.Render(" / unknown size")
+					}
+				} else {
+					label += styleDim.Render("  connecting…")
+				}
+			case stepTranscribe:
+				if m.txTotal > 0 {
+					label += styleDim.Render(fmt.Sprintf("  (chunk %d/%d)", m.txChunk, m.txTotal))
+				}
+			case stepRefine:
 				host := m.cfg.RefinerBaseURL
 				switch host {
 				case "http://localhost:11434/v1":
@@ -389,16 +404,8 @@ func (m tuiModel) View() string {
 		}
 		b.WriteString(fmt.Sprintf("  %s  %s\n", icon, label))
 
-		if s.status == statusRunning && (i == stepDownload || i == stepExtract || i == stepTranscribe) {
+		if s.status == statusRunning && (i == stepDownload || i == stepExtract || i == stepTranscribe || i == stepRefine) {
 			b.WriteString("\n  " + m.prog.View() + "\n\n")
-		}
-		// Refine step: show a fraction-based progress bar derived from chunk counter
-		if s.status == statusRunning && i == stepRefine && m.rfTotal > 0 {
-			pct := float64(m.rfChunk) / float64(m.rfTotal)
-			progBar, _ := m.prog.Update(m.prog.SetPercent(pct))
-			if pm, ok := progBar.(progress.Model); ok {
-				b.WriteString("\n  " + pm.View() + "\n\n")
-			}
 		}
 	}
 
@@ -421,10 +428,10 @@ func (m tuiModel) cmdForStep(idx int) tea.Cmd {
 	switch idx {
 	case stepExtract:
 		return m.cmdExtract()
+	case stepDownload:
+		return m.cmdDownload()
 	case stepTranscribe:
 		return m.cmdTranscribe()
-	case stepTranslate:
-		return m.cmdTranslate()
 	case stepWrite:
 		return m.cmdWrite()
 	case stepRefine:
@@ -457,8 +464,7 @@ func (m tuiModel) cmdDownload() tea.Cmd {
 			if err != nil {
 				return stepErrMsg{stepDownload, err}
 			}
-			_, filename := filepath.Split(mgr.ModelPath(modelName))
-			return stepDoneMsg{stepDownload, filename}
+			return stepDoneMsg{stepDownload, modelName}
 		},
 		ch.wait(),
 	)
@@ -517,7 +523,6 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			defer cancel()
 
 			pcmPath := filepath.Join(cfg.DataDir, "tmp", "audio.pcm")
-			useTranslation := cfg.TranslatorID == "whisper"
 
 			t, err := transcribe.NewWhisperTranscriber(mgr.ModelPath(cfg.ModelName), cfg.BeamSize, cfg.VAD, cfg.Prompt, cfg.ChunkSize)
 			if err != nil {
@@ -526,7 +531,7 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			}
 			defer t.Close()
 
-			segs, err := t.Transcribe(ctx, pcmPath, cfg.Lang, useTranslation, func(pct float32, chunk int, total int) {
+			segs, detectedLang, err := t.Transcribe(ctx, pcmPath, cfg.Lang, false, func(pct float32, chunk int, total int) {
 				select {
 				case ch <- txProgressMsg{pct, chunk, total}:
 				default:
@@ -536,6 +541,7 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 			if err != nil {
 				return stepErrMsg{stepTranscribe, err}
 			}
+			pipe.sourceLang = detectedLang
 
 			if cfg.Clean {
 				segs = intsegment.Clean(segs)
@@ -557,35 +563,6 @@ func (m tuiModel) cmdTranscribe() tea.Cmd {
 	)
 }
 
-func (m tuiModel) cmdTranslate() tea.Cmd {
-	cfg := m.cfg
-	pipe := m.pipe
-
-	return func() tea.Msg {
-		ctx, cancel := context.WithCancel(context.Background())
-		pipe.cancel = cancel
-		defer cancel()
-
-		var tr translate.Translator
-		if cfg.TranslatorID == "openai" {
-			tr = translate.NewOpenAITranslator(translate.OpenAIConfig{
-				BaseURL: cfg.OpenAIBaseURL,
-				APIKey:  cfg.OpenAIAPIKey,
-				Model:   cfg.OpenAIModel,
-			})
-		} else {
-			tr = translate.NewWhisperTranslator()
-		}
-
-		segs, err := tr.Translate(ctx, pipe.segments, cfg.Lang)
-		if err != nil {
-			return stepErrMsg{stepTranslate, err}
-		}
-		pipe.segments = segs
-		return stepDoneMsg{stepTranslate, ""}
-	}
-}
-
 func (m tuiModel) cmdWrite() tea.Cmd {
 	cfg := m.cfg
 	pipe := m.pipe
@@ -605,11 +582,12 @@ func (m *tuiModel) cmdRefine() tea.Cmd {
 
 	runFn := func() tea.Msg {
 		rCfg := refine.RefineConfig{
-			BaseURL:   cfg.RefinerBaseURL,
-			APIKey:    cfg.RefinerAPIKey,
-			Model:     cfg.RefinerModel,
-			Prompt:    cfg.RefinerPrompt,
-			Chunk:     cfg.RefinerChunk,
+			BaseURL:    cfg.RefinerBaseURL,
+			APIKey:     cfg.RefinerAPIKey,
+			Model:      cfg.RefinerModel,
+			Prompt:     cfg.RefinerPrompt,
+			SourceLang: pipe.sourceLang,
+			Chunk:      cfg.RefinerChunk,
 			OnProgress: func(chunk, total int) {
 				rfCh <- rfProgressMsg{chunk: chunk, totalChunks: total}
 			},

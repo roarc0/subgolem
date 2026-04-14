@@ -162,11 +162,6 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("-o is only valid for a single input file")
 	}
 
-	translatorID := viper.GetString("translator")
-	if translatorID != "whisper" && translatorID != "openai" {
-		return fmt.Errorf("unknown translator %q — valid: whisper, openai", translatorID)
-	}
-
 	// ── LLM refiner backend resolution ──────────────────────────────────────
 	// Each backend has sensible defaults; explicit config fields override them.
 	type backendDefaults struct{ url, key, model string }
@@ -207,11 +202,7 @@ func run(cmd *cobra.Command, args []string) error {
 			OutputPath:     out,
 			ModelName:      viper.GetString("model"),
 			Lang:           viper.GetString("language"),
-			TranslatorID:   translatorID,
 			DataDir:        viper.GetString("data_dir"),
-			OpenAIBaseURL:  viper.GetString("openai.base_url"),
-			OpenAIAPIKey:   viper.GetString("openai.api_key"),
-			OpenAIModel:    viper.GetString("openai.model"),
 			AudioFilter:    viper.GetBool("audio_filter"),
 			BeamSize:       viper.GetInt("beam_size"),
 			ChunkSize:      viper.GetInt("chunk_size"),
@@ -230,6 +221,7 @@ func run(cmd *cobra.Command, args []string) error {
 			RefinerModel:   refinerModel,
 			RefinerChunk:   viper.GetInt("llm_refine.chunk_size"),
 			RefinerPrompt:  viper.GetString("llm_refine.prompt"),
+			WhisperModels:  viper.GetStringMapString("whisper_models"),
 		}
 
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)

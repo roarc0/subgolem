@@ -72,15 +72,15 @@ func (w *WhisperTranscriber) Close() error {
 // lang: BCP-47 language code ("he", "en", …) or "auto" for detection.
 // translate: when true, whisper natively outputs English regardless of source language.
 // onProgress is called with a value in [0,1] as transcription advances, along with chunk status; pass nil to silence it.
-func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang string, translate bool, onProgress func(float32, int, int)) ([]segment.Segment, error) {
+func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang string, translate bool, onProgress func(float32, int, int)) ([]segment.Segment, string, error) {
 	samples, err := readF32LE(pcmPath)
 	if err != nil {
-		return nil, fmt.Errorf("read PCM: %w", err)
+		return nil, "", fmt.Errorf("read PCM: %w", err)
 	}
 
 	ctx, err := w.model.NewContext()
 	if err != nil {
-		return nil, fmt.Errorf("new whisper context: %w", err)
+		return nil, "", fmt.Errorf("new whisper context: %w", err)
 	}
 
 	ctx.SetThreads(uint(runtime.NumCPU()))
@@ -96,7 +96,7 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 
 	if lang != "" && lang != "auto" {
 		if err := ctx.SetLanguage(lang); err != nil {
-			return nil, fmt.Errorf("set language %q: %w", lang, err)
+			return nil, "", fmt.Errorf("set language %q: %w", lang, err)
 		}
 	}
 	ctx.SetTranslate(translate)
@@ -116,6 +116,7 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 	restore := muteStderr()
 	defer restore()
 
+	detectedLang := lang
 	for start := 0; start < totalSamples; start += blockSize {
 		end := start + blockSize
 		if end > totalSamples {
@@ -136,7 +137,12 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 
 		err = ctx.Process(chunk, nil, nil, progressCb)
 		if err != nil {
-			return nil, fmt.Errorf("whisper process chunk %d: %w", start/blockSize, err)
+			return nil, "", fmt.Errorf("whisper process chunk %d: %w", start/blockSize, err)
+		}
+
+		// Update detected language if it was "auto"
+		if detectedLang == "auto" || detectedLang == "" {
+			detectedLang = ctx.Language()
 		}
 
 		timeOffsetMilli := int64(start) * 1000 / int64(sampleRate)
@@ -148,7 +154,7 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("next segment: %w", err)
+				return nil, "", fmt.Errorf("next segment: %w", err)
 			}
 			allSegs = append(allSegs, segment.Segment{
 				Start: s.Start + timeOffset,
@@ -157,7 +163,7 @@ func (w *WhisperTranscriber) Transcribe(_ context.Context, pcmPath string, lang 
 			})
 		}
 	}
-	return allSegs, nil
+	return allSegs, detectedLang, nil
 }
 
 // readF32LE reads a raw 32-bit float little-endian PCM file into float32 samples.

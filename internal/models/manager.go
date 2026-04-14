@@ -7,7 +7,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+func logProgress(msg string) {
+	f, err := os.OpenFile("data/subgolem.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
+}
 
 const huggingFaceBase = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
 
@@ -21,17 +31,42 @@ var knownModels = map[string]string{
 
 // Manager handles whisper model lifecycle: path resolution and downloading.
 type Manager struct {
-	dataDir string
+	dataDir    string
+	customURLs map[string]string
 }
 
-func NewManager(dataDir string) *Manager { return &Manager{dataDir: dataDir} }
+func NewManager(dataDir string, customURLs map[string]string) *Manager {
+	return &Manager{
+		dataDir:    dataDir,
+		customURLs: customURLs,
+	}
+}
 
 func (m *Manager) DataDir() string { return m.dataDir }
 
-// ModelPath returns the absolute path for a known model, or "" if unknown.
+// ModelPath returns the absolute path for a model.
+// 1. If 'model' is an existing local file, returns it as-is.
+// 2. If 'model' is a known name or custom alias, returns path in dataDir/models.
+// 3. Otherwise returns "".
 func (m *Manager) ModelPath(model string) string {
-	filename, ok := knownModels[model]
-	if !ok {
+	// If it's already a valid local file path, use it
+	if info, err := os.Stat(model); err == nil && !info.IsDir() {
+		return model
+	}
+
+	var filename string
+	if f, ok := knownModels[model]; ok {
+		filename = f
+	} else if _, ok := m.customURLs[model]; ok {
+		// If it's a custom URL, use the model key as the filename basis.
+		// This keeps files organized and avoids clashing base names like 'ggml-model.bin'.
+		filename = model
+		if filepath.Ext(filename) != ".bin" {
+			filename += ".bin"
+		}
+	}
+
+	if filename == "" {
 		return ""
 	}
 	return filepath.Join(m.dataDir, "models", filename)
@@ -50,29 +85,42 @@ func (m *Manager) IsDownloaded(model string) bool {
 // EnsureDownloaded downloads the model if not already present.
 // onProgress is called with (bytesWritten, totalBytes) during download; pass nil to silence it.
 func (m *Manager) EnsureDownloaded(ctx context.Context, model string, onProgress func(done, total int64)) error {
+	// If it's a local file path that already exists, we're done
 	if m.IsDownloaded(model) {
 		return nil
 	}
-	filename, ok := knownModels[model]
-	if !ok {
-		return fmt.Errorf("unknown model %q — valid: tiny, base, small, medium, large-v3", model)
+
+	var url string
+	if u, ok := m.customURLs[model]; ok {
+		url = u
+	} else if filename, ok := knownModels[model]; ok {
+		url = huggingFaceBase + filename
+	}
+
+	if url == "" {
+		return fmt.Errorf("unknown model %q — define it in 'whisper_models' config or provide absolute path to .bin file", model)
 	}
 
 	dest := m.ModelPath(model)
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return fmt.Errorf("create models dir: %w", err)
 	}
-
-	url := huggingFaceBase + filename
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		Timeout: 30 * time.Minute, // Large for slow downloads, but prevents infinite hangs
+	}
+	logProgress(fmt.Sprintf("Starting request to %s", url))
+	resp, err := client.Do(req)
 	if err != nil {
+		logProgress(fmt.Sprintf("Request failed: %v", err))
 		return fmt.Errorf("download %s: %w", model, err)
 	}
 	defer resp.Body.Close()
+	logProgress(fmt.Sprintf("HTTP %d, Content-Length: %d", resp.StatusCode, resp.ContentLength))
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %d", model, resp.StatusCode)
 	}
@@ -95,9 +143,13 @@ func (m *Manager) EnsureDownloaded(ctx context.Context, model string, onProgress
 		})
 	}
 
-	if _, err := io.Copy(dst, resp.Body); err != nil {
+	logProgress("Starting transfer...")
+	n, err := io.Copy(dst, resp.Body)
+	if err != nil {
+		logProgress(fmt.Sprintf("Transfer failed after %d bytes: %v", n, err))
 		return fmt.Errorf("write model: %w", err)
 	}
+	logProgress(fmt.Sprintf("Transfer complete: %d bytes", n))
 	f.Close()
 
 	if err := os.Rename(tmp, dest); err != nil {

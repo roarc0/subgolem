@@ -1,6 +1,13 @@
-model: large-v3
+# Model to use. Valid short names: tiny, base, small, medium, large-v3, ivrit-ai/whisper-large-v3-ggml.
+# 'ivrit-ai/whisper-large-v3-ggml' is an optimized model from ivrit-ai.
+# You can also provide an absolute path to a local .bin (GGML/GGUF) file.
+#model: large-v3
+model: ivrit-ai/whisper-large-v3-ggml
+
+whisper_models:
+  ivrit-ai/whisper-large-v3-ggml: "https://huggingface.co/ivrit-ai/whisper-large-v3-ggml/resolve/main/ggml-model.bin"
+
 language: auto
-translator: whisper
 gpu: true
 data_dir: data
 
@@ -20,10 +27,6 @@ merge_chars: 80      # max characters per merged segment
 split_chars: 80      # split segments longer than this (0 = disabled)
 fix_overlaps: true   # trim segment end times that overlap the next segment
 
-openai:
-  base_url: http://localhost:1234/v1
-  api_key: ""
-  model: gpt-4o-mini
 
 llm_refine:
   enabled: true
@@ -42,4 +45,4 @@ llm_refine:
   model:    ""
 
   chunk_size: 40      # Number of subtitles to process per LLM request
-  prompt: "You are an expert subtitle editor. Here is a chunk of an SRT file. Fix spelling and grammar mistakes. Join short phrases that naturally belong on the same line if possible, adjusting the timestamps accordingly. Do not invent new content, emit chat dialogue, or change the original meaning. Return ONLY the fixed lines in valid SRT format, with no surrounding formatting or code block artifacts."
+  prompt: "You are an expert translator and subtitle editor. Translate the following subtitles from {{.SourceLang}} to natural, idiomatic English, while strictly preserving the nuanced context and intended meaning of the source language. Fix spelling and grammar, join short phrases that naturally belong on the same line if possible, adjusting the timestamps accordingly. Do not invent new content, emit chat dialogue, or change the original meaning. Return ONLY the fixed lines in valid SRT format, with no surrounding formatting or code block artifacts."

@@ -1,10 +1,12 @@
 package refine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
@@ -17,6 +19,7 @@ type RefineConfig struct {
 	APIKey     string
 	Model      string
 	Prompt     string
+	SourceLang string
 	Chunk      int
 	MaxTokens  int           // per-chunk token cap; 0 = use default (2048)
 	Timeout    time.Duration // per-request HTTP timeout; 0 = use default (5m)
@@ -56,6 +59,22 @@ func (r *LlmRefiner) Refine(ctx context.Context, segs []segment.Segment) (string
 		return "", nil
 	}
 
+	// 0. Process the prompt template
+	tmpl, err := template.New("prompt").Parse(r.cfg.Prompt)
+	if err != nil {
+		return "", fmt.Errorf("parse refiner prompt template: %w", err)
+	}
+	var promptBuf bytes.Buffer
+	err = tmpl.Execute(&promptBuf, struct {
+		SourceLang string
+	}{
+		SourceLang: r.cfg.SourceLang,
+	})
+	if err != nil {
+		return "", fmt.Errorf("execute refiner prompt template: %w", err)
+	}
+	resolvedPrompt := promptBuf.String()
+
 	var finalOutput strings.Builder
 	chunkSize := r.cfg.Chunk
 	if chunkSize <= 0 {
@@ -77,7 +96,7 @@ func (r *LlmRefiner) Refine(ctx context.Context, segs []segment.Segment) (string
 			Model:     r.cfg.Model,
 			MaxTokens: r.cfg.MaxTokens,
 			Messages: []openai.ChatCompletionMessage{
-				{Role: openai.ChatMessageRoleSystem, Content: r.cfg.Prompt},
+				{Role: openai.ChatMessageRoleSystem, Content: resolvedPrompt},
 				{Role: openai.ChatMessageRoleUser, Content: chunkStr},
 			},
 		})
