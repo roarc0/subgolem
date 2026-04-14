@@ -172,7 +172,7 @@ func run(cmd *cobra.Command, args []string) error {
 	type backendDefaults struct{ url, key, model string }
 	backendPresets := map[string]backendDefaults{
 		"ollama":   {url: "http://localhost:11434/v1", key: "ollama", model: "qwen2.5:7b"},
-		"llamacpp": {url: "http://localhost:8080/v1", key: "none", model: "qwen2.5-7b-instruct-q4_k_m"},
+		"llamacpp": {url: "http://localhost:8080/v1", key: "none", model: "Qwen2.5-7B-Instruct-Q4_K_M.gguf"},
 	}
 	refinerBackend := viper.GetString("llm_refine.backend")
 	if refinerBackend == "" {

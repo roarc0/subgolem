@@ -100,8 +100,9 @@ setup-llamacpp:
 
 ## llm-server    — start llama.cpp server on :8080 (run after setup-llamacpp)
 llm-server:
+	LD_LIBRARY_PATH=$(PWD)/data/llama-bin$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH} \
 	data/llama-bin/llama-server \
-		-m data/models/qwen2.5-7b-instruct-q4_k_m.gguf \
+		-m data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
 		-ngl 99 --port 8080 --ctx-size 4096
 
 ## help     — print available targets
